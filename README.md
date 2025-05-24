@@ -2,11 +2,30 @@
 
 Ever wondered what it would look like to collect massive amounts of productivity and self-improvement content from Reddit? This project does exactly that - it's designed to gather around 10GB of high-quality posts and comments from Reddit's most active productivity-focused communities.
 
+**📖 For detailed usage instructions, see [HOW_TO_USE.md](HOW_TO_USE.md)**
+
 ## What This Project Does
 
 This system collects comprehensive data from 10 hand-picked subreddits that focus on productivity, self-improvement, and building better habits. We're talking about communities like r/productivity, r/getdisciplined, r/selfimprovement, and others where people share real strategies, success stories, and advice for getting their lives together.
 
 The goal isn't just to grab a few posts - we're aiming for **10 gigabytes** of compressed data, which translates to roughly a million posts plus their comment threads. That's enough content to power serious research, build recommendation systems, or train AI models on what actually helps people become more productive.
+
+## Quick Start
+
+### Test the System (15-minute validation)
+```bash
+python reddit_enhanced_collector.py --test
+```
+
+### Start Full Collection (6-12 hours)
+```bash
+python reddit_enhanced_collector.py
+```
+
+### Monitor Progress
+```bash
+python monitor_collection.py --detailed
+```
 
 ## Why This Approach?
 
@@ -23,6 +42,7 @@ Instead of just grabbing the "hot" posts from last week, our collector:
 - **Includes the conversation**: Grabs up to 15 top comments per post (this is where the real insights often are)
 - **Stays efficient**: Uses maximum compression and saves data in manageable batches
 - **Respects rate limits**: Built-in delays and retry logic to avoid getting blocked
+- **Test mode included**: 15-minute validation run to ensure everything works
 
 ## How Everything Works Together
 
@@ -30,6 +50,8 @@ Instead of just grabbing the "hot" posts from last week, our collector:
 This is the heart of the system. It's built around several key principles:
 
 **OAuth Authentication**: Instead of anonymous API calls, we authenticate with Reddit's OAuth system. This gives us higher rate limits and more reliable access. The system automatically handles token refresh and authentication failures.
+
+**Test Mode**: Before running the full 6-12 hour collection, you can run a 15-minute test with `--test` flag. This validates all systems work correctly and collects sample data.
 
 **Parallel Processing**: The collector works through all 10 subreddits systematically, but within each subreddit, it's smart about gathering diverse content. It rotates through different sorting methods and time periods to avoid getting stuck in echo chambers.
 
@@ -58,6 +80,7 @@ ReFocused-Ai/
 ├── monitor_collection.py          # Real-time progress monitoring
 ├── requirements.txt               # Python dependencies
 ├── .gitignore                     # Keeps data out of version control
+├── HOW_TO_USE.md                  # Detailed usage instructions
 └── data/                          # Collection output (ignored by git)
     └── reddit_enhanced/           # Compressed data files organized by subreddit
 ```
@@ -76,7 +99,10 @@ pip install -r requirements.txt
 # Test your setup (optional but recommended)
 python test_oauth_setup.py
 
-# Start collecting data
+# Run 15-minute validation test
+python reddit_enhanced_collector.py --test
+
+# Start collecting data (full collection)
 python reddit_enhanced_collector.py
 ```
 
@@ -91,6 +117,8 @@ python monitor_collection.py --detailed
 # Monitor specific data directory
 python monitor_collection.py --dir data/reddit_enhanced --detailed
 ```
+
+**📖 For complete step-by-step instructions, troubleshooting, and examples, see [HOW_TO_USE.md](HOW_TO_USE.md)**
 
 ## Technical Design Decisions
 
@@ -202,4 +230,4 @@ The data represents one of the most comprehensive collections of productivity an
 
 ---
 
-*Ready to dive into the collective wisdom of Reddit's productivity communities? Just run the collector and let it work its magic.* 
+*Ready to dive into the collective wisdom of Reddit's productivity communities? Start with the test mode and let it work its magic.* 
