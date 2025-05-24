@@ -99,4 +99,56 @@ temp/
 # Backup files
 *.bak
 *.backup
-*~ 
+*~
+
+# Translations
+*.mo
+*.pot
+
+# pyenv
+.python-version
+
+# celery beat schedule file
+celerybeat-schedule
+
+# SageMath parsed files
+*.sage.py
+
+# Spyder project settings
+.spyderproject
+.spyproject
+
+# Rope project settings
+.ropeproject
+
+# mkdocs documentation
+/site
+
+# mypy
+.mypy_cache/
+.dmypy.json
+dmypy.json
+
+# Training & Model Files
+models/
+checkpoints/
+wandb/
+tensorboard_logs/
+*.pth
+*.pt
+*.ckpt
+
+# Processed Data
+data/processed/
+data/tokenized/
+
+# Config overrides (keep templates)
+configs/local_*.yaml
+configs/personal_*.yaml
+
+# Large data files (keep structure)
+data/*/*.txt
+data/*/*.json
+data/*/*.jsonl
+data/*/*.csv
+data/*/*.parquet 
