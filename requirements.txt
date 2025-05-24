@@ -1,0 +1,8 @@
+# Data Collection
+requests>=2.31.0
+
+# Data Cleaning  
+better_profanity>=0.7.0
+
+# Data Processing
+pandas>=2.0.0 
