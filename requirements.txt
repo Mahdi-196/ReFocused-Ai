@@ -1,19 +1,30 @@
-# Data Collection
-requests>=2.31.0
-aiohttp>=3.9.0
-aiofiles>=23.2.0
-
-# Retry Logic & Rate Limiting
-tenacity>=8.2.0
-
-# Data Cleaning  
-better_profanity>=0.7.0
-
-# Reddit Data Cleaning
-pmaw>=3.0.0
-
-# Data Processing
+# Core Data Processing
 pandas>=2.0.0
+numpy>=1.24.0
+psutil>=5.8.0
 
-# Logging
-loguru>=0.7.0 
+# Text Processing & Cleaning
+better_profanity>=0.7.0
+nltk>=3.8.0
+
+# Machine Learning
+torch>=2.0.0
+transformers>=4.30.0
+datasets>=2.14.0
+scikit-learn>=1.3.0
+
+# Large Dataset Processing
+dask>=2023.1.0
+pyarrow>=12.0.0
+huggingface_hub>=0.16.0
+
+# Utilities
+loguru>=0.7.0
+tqdm>=4.65.0
+pyyaml>=6.0.0
+jsonlines>=3.1.0
+memory_profiler>=0.60.0
+
+# Testing & Development
+pytest>=7.4.0
+jupyter 
