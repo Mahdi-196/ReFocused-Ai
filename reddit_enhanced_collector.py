@@ -11,6 +11,7 @@ import gzip
 import json
 import time
 import base64
+import argparse
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Dict, List, Optional, Any
@@ -33,6 +34,10 @@ TARGET_SUBREDDITS = [
     'productivity', 'getdisciplined', 'selfimprovement', 'decidingtobebetter',
     'lifehacks', 'getmotivated', 'askpsychology', 'simpleliving', 'fitness', 'zenhabits'
 ]
+
+# Global variable to track if we're in test mode
+TEST_MODE = False
+TEST_DURATION_MINUTES = 15
 
 # Optimized settings for 10GB target
 COLLECTION_CONFIG = {
@@ -146,6 +151,18 @@ class EnhancedRedditDataCollector:
         self.rate_limiter = asyncio.Semaphore(COLLECTION_CONFIG['concurrent_requests'])
         self.request_times = []
         self.posts_collected = 0
+        self.start_time = datetime.now()
+        
+    def should_stop_collection(self) -> bool:
+        """Check if we should stop collection (for test mode)"""
+        if not TEST_MODE:
+            return False
+            
+        elapsed_minutes = (datetime.now() - self.start_time).total_seconds() / 60
+        if elapsed_minutes >= TEST_DURATION_MINUTES:
+            logger.info(f"🧪 Test mode: Stopping collection after {elapsed_minutes:.1f} minutes")
+            return True
+        return False
         
     async def rate_limit_delay(self):
         now = time.time()
@@ -250,8 +267,12 @@ class EnhancedRedditDataCollector:
         target_posts = COLLECTION_CONFIG['target_posts_per_subreddit']
         batch_count = 0
         
+        # In test mode, reduce target significantly
+        if TEST_MODE:
+            target_posts = min(1000, target_posts)  # Limit to 1000 posts in test mode
+        
         for sort_type in COLLECTION_CONFIG['sort_types']:
-            if posts_collected >= target_posts:
+            if posts_collected >= target_posts or self.should_stop_collection():
                 break
                 
             logger.info(f"Collecting {sort_type} posts from r/{subreddit}")
@@ -259,14 +280,14 @@ class EnhancedRedditDataCollector:
             time_periods = COLLECTION_CONFIG['time_periods'] if sort_type == 'top' else [None]
             
             for time_period in time_periods:
-                if posts_collected >= target_posts:
+                if posts_collected >= target_posts or self.should_stop_collection():
                     break
                     
                 after = None
                 pages = 0
-                max_pages = 100  # Limit pages per category
+                max_pages = 10 if TEST_MODE else 100  # Limit pages in test mode
                 
-                while posts_collected < target_posts and pages < max_pages:
+                while posts_collected < target_posts and pages < max_pages and not self.should_stop_collection():
                     try:
                         data = await self.fetch_subreddit_posts(
                             subreddit, sort_type, 
@@ -284,7 +305,7 @@ class EnhancedRedditDataCollector:
                         # Process posts in batch
                         batch_posts = []
                         for post in posts:
-                            if posts_collected >= target_posts:
+                            if posts_collected >= target_posts or self.should_stop_collection():
                                 break
                                 
                             filtered_post = self.filter_post_data(post)
@@ -328,7 +349,8 @@ class EnhancedRedditDataCollector:
             batch_count += 1
             await self.save_data(subreddit, all_posts, batch_count)
         
-        logger.success(f"Completed r/{subreddit}: {posts_collected} posts in {batch_count} batches")
+        status = "test completed" if TEST_MODE else "completed"
+        logger.success(f"Collection {status} for r/{subreddit}: {posts_collected} posts in {batch_count} batches")
         return posts_collected
     
     async def save_data(self, subreddit: str, posts: List[Dict[str, Any]], batch_num: int):
@@ -336,7 +358,8 @@ class EnhancedRedditDataCollector:
             return
         
         timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-        filename = COLLECTION_CONFIG['data_directory'] / f"{subreddit}_batch{batch_num}_{timestamp}.txt.gz"
+        prefix = "test_" if TEST_MODE else ""
+        filename = COLLECTION_CONFIG['data_directory'] / f"{prefix}{subreddit}_batch{batch_num}_{timestamp}.txt.gz"
         
         try:
             json_lines = '\n'.join(json.dumps(post, ensure_ascii=False) for post in posts)
@@ -351,7 +374,8 @@ class EnhancedRedditDataCollector:
             file_size = filename.stat().st_size / (1024 * 1024)
             total_items = len(posts) + sum(len(post.get('comments', [])) for post in posts)
             
-            logger.success(f"Saved batch {batch_num} for r/{subreddit}: {len(posts)} posts + comments ({file_size:.2f} MB, {total_items} items)")
+            mode_text = " (TEST)" if TEST_MODE else ""
+            logger.success(f"Saved batch {batch_num} for r/{subreddit}{mode_text}: {len(posts)} posts + comments ({file_size:.2f} MB, {total_items} items)")
             
         except Exception as e:
             logger.error(f"Error saving batch for r/{subreddit}: {e}")
@@ -361,8 +385,11 @@ class EnhancedRedditDataCollector:
 # ================================
 
 async def collect_reddit_data():
-    logger.info("Starting enhanced Reddit data collection")
-    logger.info(f"Target: {len(TARGET_SUBREDDITS)} subreddits, ~{COLLECTION_CONFIG['target_posts_per_subreddit']:,} posts each")
+    mode_text = "TEST MODE - 15 minute limit" if TEST_MODE else "FULL COLLECTION"
+    target_text = "~10,000 posts" if TEST_MODE else f"~{COLLECTION_CONFIG['target_posts_per_subreddit']:,} posts each"
+    
+    logger.info(f"Starting enhanced Reddit data collection - {mode_text}")
+    logger.info(f"Target: {len(TARGET_SUBREDDITS)} subreddits, {target_text}")
     
     start_time = datetime.now()
     
@@ -373,6 +400,10 @@ async def collect_reddit_data():
         successful_subreddits = 0
         
         for i, subreddit in enumerate(TARGET_SUBREDDITS, 1):
+            if collector.should_stop_collection():
+                logger.info("🧪 Test mode time limit reached, stopping collection")
+                break
+                
             try:
                 logger.info(f"Processing subreddit {i}/{len(TARGET_SUBREDDITS)}: r/{subreddit}")
                 posts = await collector.collect_subreddit_data(subreddit)
@@ -393,7 +424,13 @@ async def collect_reddit_data():
         end_time = datetime.now()
         duration = end_time - start_time
         
-        logger.success("Collection completed!")
+        if TEST_MODE:
+            logger.success("🧪 TEST COLLECTION COMPLETED!")
+            logger.info("✅ System is working correctly")
+            logger.info("🚀 Ready for full collection - run without --test flag")
+        else:
+            logger.success("Collection completed!")
+            
         logger.info(f"Successful subreddits: {successful_subreddits}/{len(TARGET_SUBREDDITS)}")
         logger.info(f"Total posts: {total_posts:,}")
         logger.info(f"Duration: {duration}")
@@ -412,34 +449,60 @@ def setup_logging():
     logger.add(log_file, format="{time} | {level} | {message}", level="DEBUG", rotation="50 MB")
 
 def print_configuration():
+    mode_text = "🧪 TEST MODE" if TEST_MODE else "🚀 FULL COLLECTION"
     print("\n" + "="*60)
-    print("🚀 ENHANCED REDDIT DATA COLLECTOR")
+    print(f"{mode_text} - ENHANCED REDDIT DATA COLLECTOR")
     print("="*60)
     print(f"Target Subreddits: {len(TARGET_SUBREDDITS)}")
     for i, sub in enumerate(TARGET_SUBREDDITS, 1):
         print(f"  {i:2d}. r/{sub}")
     
     print(f"\nCollection Settings:")
-    print(f"  Minimum Score: {COLLECTION_CONFIG['min_score']} (low for maximum data)")
-    print(f"  Target per Subreddit: {COLLECTION_CONFIG['target_posts_per_subreddit']:,} posts")
+    if TEST_MODE:
+        print(f"  🧪 TEST MODE: 15-minute time limit")
+        print(f"  🧪 TEST MODE: ~1,000 posts per subreddit max")
+        print(f"  🧪 TEST MODE: Files prefixed with 'test_'")
+    else:
+        print(f"  Minimum Score: {COLLECTION_CONFIG['min_score']} (low for maximum data)")
+        print(f"  Target per Subreddit: {COLLECTION_CONFIG['target_posts_per_subreddit']:,} posts")
+        print(f"  Estimated Total: ~{COLLECTION_CONFIG['target_posts_per_subreddit'] * len(TARGET_SUBREDDITS):,} posts")
+        
     print(f"  Comments per Post: {COLLECTION_CONFIG['max_comments_per_post']}")
     print(f"  Sort Types: {', '.join(COLLECTION_CONFIG['sort_types'])}")
     print(f"  Batch Size: {COLLECTION_CONFIG['save_batch_size']} posts")
-    print(f"  Estimated Total: ~{COLLECTION_CONFIG['target_posts_per_subreddit'] * len(TARGET_SUBREDDITS):,} posts")
     print("="*60 + "\n")
 
+def parse_arguments():
+    parser = argparse.ArgumentParser(description='Enhanced Reddit Data Collector')
+    parser.add_argument('--test', action='store_true', 
+                       help='Run in test mode (15-minute limit for validation)')
+    return parser.parse_args()
+
 if __name__ == "__main__":
+    args = parse_arguments()
+    TEST_MODE = args.test
+    
     setup_logging()
     print_configuration()
     
-    print("🎯 Target: 10GB of Reddit data with comments")
-    print("⏱️  Estimated time: 6-12 hours")
-    print("💾 Data will be saved in compressed batches")
+    if TEST_MODE:
+        print("🧪 TEST MODE: 15-minute validation run")
+        print("💡 This will test the system and collect sample data")
+        print("⏱️  Collection will automatically stop after 15 minutes")
+    else:
+        print("🎯 Target: 10GB of Reddit data with comments")
+        print("⏱️  Estimated time: 6-12 hours")
+        print("💾 Data will be saved in compressed batches")
     
     try:
         asyncio.run(collect_reddit_data())
-        print("\n✅ Collection completed!")
-        print(f"📁 Data saved to: {COLLECTION_CONFIG['data_directory']}")
+        if TEST_MODE:
+            print("\n✅ Test completed successfully!")
+            print("🚀 System is ready for full collection")
+            print("💡 Run without --test flag for full 10GB collection")
+        else:
+            print("\n✅ Collection completed!")
+            print(f"📁 Data saved to: {COLLECTION_CONFIG['data_directory']}")
         
     except KeyboardInterrupt:
         print("\n🛑 Collection interrupted")
