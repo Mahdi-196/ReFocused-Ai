@@ -200,6 +200,58 @@ class MassiveDatasetManager:
             logger.error(f"❌ Error analyzing Reddit dataset: {e}")
             return {}
     
+    def analyze_reddit_directory(self, directory_path: Path) -> Dict:
+        """Analyze entire directory of Reddit .zst files"""
+        logger.info(f"📱 Analyzing Reddit directory: {directory_path}")
+        
+        if not directory_path.exists():
+            logger.error(f"❌ Directory not found: {directory_path}")
+            return {}
+        
+        zst_files = list(directory_path.glob("*.zst"))
+        if not zst_files:
+            logger.error(f"❌ No .zst files found in {directory_path}")
+            return {}
+        
+        total_size = sum(f.stat().st_size for f in zst_files)
+        total_size_gb = total_size / (1024**3)
+        
+        # Analyze subreddits
+        subreddits = {}
+        for file in zst_files:
+            name_parts = file.stem.split('_')
+            if len(name_parts) >= 2:
+                subreddit = name_parts[0]
+                file_type = name_parts[1] if len(name_parts) > 1 else 'unknown'
+                
+                if subreddit not in subreddits:
+                    subreddits[subreddit] = {'files': 0, 'size_mb': 0}
+                
+                subreddits[subreddit]['files'] += 1
+                subreddits[subreddit]['size_mb'] += file.stat().st_size / (1024**2)
+        
+        # Estimate records (typical Reddit data has ~1000-5000 records per MB compressed)
+        estimated_records = int(total_size / 500)  # Conservative estimate
+        
+        analysis = {
+            'directory_path': str(directory_path),
+            'total_files': len(zst_files),
+            'size_gb': total_size_gb,
+            'estimated_records': estimated_records,
+            'unique_subreddits': len(subreddits),
+            'subreddits_sample': dict(list(subreddits.items())[:10]),  # Top 10 for display
+            'source_type': 'reddit_directory',
+            'format': 'ZST_compressed'
+        }
+        
+        logger.success(f"✅ Reddit directory analysis:")
+        logger.info(f"   📁 Files: {len(zst_files)} .zst files")
+        logger.info(f"   📊 Size: {total_size_gb:.1f}GB")
+        logger.info(f"   🏷️  Subreddits: {len(subreddits)} unique")
+        logger.info(f"   📈 Est. records: {estimated_records:,}")
+        
+        return analysis
+
     def create_unified_processing_plan(self, sources: List[Dict]) -> Dict:
         """Create unified processing plan for all data sources"""
         logger.info("📋 Creating unified processing plan...")
@@ -401,6 +453,42 @@ class MassiveDatasetManager:
             if current_chunk_file:
                 current_chunk_file.close()
     
+    def extract_reddit_directory(self, directory_path: Path, chunk_size_mb: int = 100) -> List[Path]:
+        """Extract all .zst files from Reddit directory"""
+        logger.info(f"📦 Extracting Reddit directory: {directory_path}")
+        
+        if not directory_path.exists():
+            logger.error(f"❌ Directory not found: {directory_path}")
+            return []
+        
+        zst_files = list(directory_path.glob("*.zst"))
+        if not zst_files:
+            logger.error(f"❌ No .zst files found in {directory_path}")
+            return []
+        
+        output_files = []
+        total_files = len(zst_files)
+        
+        logger.info(f"🔄 Processing {total_files} .zst files...")
+        
+        for i, zst_file in enumerate(zst_files, 1):
+            logger.info(f"📝 Processing file {i}/{total_files}: {zst_file.name}")
+            
+            try:
+                # Extract individual .zst file
+                file_outputs = self.extract_reddit_data(zst_file, chunk_size_mb)
+                output_files.extend(file_outputs)
+                
+                if i % 10 == 0:  # Progress update every 10 files
+                    logger.info(f"📊 Progress: {i}/{total_files} files processed, {len(output_files)} chunks created")
+                    
+            except Exception as e:
+                logger.error(f"❌ Error processing {zst_file.name}: {e}")
+                continue
+        
+        logger.success(f"✅ Reddit directory extracted: {len(output_files)} chunks from {total_files} files")
+        return output_files
+    
     def create_massive_processing_script(self, plan: Dict) -> Path:
         """Create optimized processing script for massive dataset"""
         script_path = Path("process_massive_dataset.py")
@@ -582,6 +670,7 @@ def main():
     
     parser = argparse.ArgumentParser(description="Setup massive multi-source dataset for cleaning")
     parser.add_argument('--reddit', type=str, help='Path to Reddit dataset file')
+    parser.add_argument('--reddit-dir', type=str, help='Path to directory containing Reddit .zst files')
     parser.add_argument('--huggingface', action='store_true', help='Setup HuggingFace OpenWebText dataset')
     parser.add_argument('--hf-dataset', type=str, default='Skylion007/openwebtext', help='HuggingFace dataset name')
     parser.add_argument('--hf-samples', type=int, help='Limit HuggingFace samples (for testing)')
@@ -593,7 +682,7 @@ def main():
     manager = MassiveDatasetManager()
     sources = []
     
-    # Analyze Reddit dataset if provided
+    # Analyze Reddit dataset file if provided
     if args.reddit:
         reddit_file = Path(args.reddit)
         if reddit_file.exists():
@@ -602,6 +691,17 @@ def main():
                 sources.append(reddit_analysis)
         else:
             logger.error(f"❌ Reddit file not found: {reddit_file}")
+            return
+    
+    # Analyze Reddit directory if provided
+    if args.reddit_dir:
+        reddit_dir = Path(args.reddit_dir)
+        if reddit_dir.exists():
+            reddit_analysis = manager.analyze_reddit_directory(reddit_dir)
+            if reddit_analysis:
+                sources.append(reddit_analysis)
+        else:
+            logger.error(f"❌ Reddit directory not found: {reddit_dir}")
             return
     
     # Analyze HuggingFace dataset if requested
@@ -615,10 +715,10 @@ def main():
             sources.append(hf_analysis)
     
     if not sources:
-        logger.error("❌ No data sources specified. Use --reddit or --huggingface")
+        logger.error("❌ No data sources specified. Use --reddit, --reddit-dir, or --huggingface")
         logger.info("💡 Usage examples:")
-        logger.info("  python setup_massive_dataset.py --reddit data.gz --huggingface --analyze-only")
-        logger.info("  python setup_massive_dataset.py --reddit data.gz --huggingface --extract")
+        logger.info("  python setup_massive_dataset.py --reddit-dir subreddits24 --analyze-only")
+        logger.info("  python setup_massive_dataset.py --reddit-dir subreddits24 --huggingface --extract")
         return
     
     # Create processing plan
@@ -631,6 +731,8 @@ def main():
         for source in sources:
             if source['source_type'] == 'reddit':
                 manager.extract_reddit_data(Path(source['file_path']))
+            elif source['source_type'] == 'reddit_directory':
+                manager.extract_reddit_directory(Path(source['directory_path']))
             elif source['source_type'] == 'huggingface':
                 manager.extract_huggingface_data(
                     source['dataset_name'], 
