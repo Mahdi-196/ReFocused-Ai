@@ -15,6 +15,7 @@ import hashlib
 from collections import defaultdict, Counter
 import multiprocessing as mp
 from functools import partial
+import zstandard as zstd  # Add zstd support
 
 from loguru import logger
 from better_profanity import profanity
@@ -94,24 +95,48 @@ class RedditDataCleaner:
         """Load data from a specific directory"""
         data = []
         
-        for file_path in directory.rglob("*.txt"):
-            try:
-                with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
-                    for line_num, line in enumerate(f, 1):
-                        line = line.strip()
-                        if line:
-                            try:
-                                item = json.loads(line)
-                                # Add source metadata
-                                item['source_file'] = str(file_path.relative_to(self.data_dir))
-                                item['source_line'] = line_num
-                                data.append(item)
-                            except json.JSONDecodeError as e:
-                                logger.debug(f"JSON decode error in {file_path}:{line_num}: {e}")
-                                continue
-            except Exception as e:
-                logger.warning(f"Error reading {file_path}: {e}")
-                continue
+        # Handle both .txt and .zst files
+        file_patterns = ["*.txt", "*.zst"]
+        
+        for pattern in file_patterns:
+            for file_path in directory.rglob(pattern):
+                try:
+                    if file_path.suffix == '.zst':
+                        # Handle .zst compressed files
+                        with open(file_path, 'rb') as f:
+                            dctx = zstd.ZstdDecompressor()
+                            with dctx.stream_reader(f) as reader:
+                                text_stream = reader.read().decode('utf-8', errors='ignore')
+                                for line_num, line in enumerate(text_stream.split('\n'), 1):
+                                    line = line.strip()
+                                    if line:
+                                        try:
+                                            item = json.loads(line)
+                                            # Add source metadata
+                                            item['source_file'] = str(file_path.relative_to(self.data_dir))
+                                            item['source_line'] = line_num
+                                            data.append(item)
+                                        except json.JSONDecodeError as e:
+                                            logger.debug(f"JSON decode error in {file_path}:{line_num}: {e}")
+                                            continue
+                    else:
+                        # Handle regular .txt files
+                        with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
+                            for line_num, line in enumerate(f, 1):
+                                line = line.strip()
+                                if line:
+                                    try:
+                                        item = json.loads(line)
+                                        # Add source metadata
+                                        item['source_file'] = str(file_path.relative_to(self.data_dir))
+                                        item['source_line'] = line_num
+                                        data.append(item)
+                                    except json.JSONDecodeError as e:
+                                        logger.debug(f"JSON decode error in {file_path}:{line_num}: {e}")
+                                        continue
+                except Exception as e:
+                    logger.warning(f"Error reading {file_path}: {e}")
+                    continue
         
         return data
     
