@@ -1,7 +1,6 @@
 # Data directories - Don't track collected Reddit data
 data/
 *.txt.gz
-*.json
 *.jsonl
 
 # Python cache and compiled files
