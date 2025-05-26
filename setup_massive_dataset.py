@@ -93,10 +93,10 @@ class MassiveDatasetManager:
             # Load dataset info first
             if streaming:
                 logger.info("📡 Using streaming mode (no local download)")
-                dataset = load_dataset(dataset_name, streaming=True, split="train")
+                dataset = load_dataset(dataset_name, streaming=True, split="train", trust_remote_code=True)
             else:
                 logger.info("💾 Downloading dataset locally (41GB)")
-                dataset = load_dataset(dataset_name, split="train")
+                dataset = load_dataset(dataset_name, split="train", trust_remote_code=True)
             
             # Analyze sample
             sample_count = 0
@@ -327,7 +327,7 @@ class MassiveDatasetManager:
             return []
     
     def extract_huggingface_data(self, dataset_name: str, chunk_size_mb: int = 100, 
-                                max_samples: Optional[int] = None) -> List[Path]:
+                                max_samples: Optional[int] = 1000000) -> List[Path]:
         """Extract HuggingFace data into chunks"""
         logger.info(f"🤗 Extracting HuggingFace data: {dataset_name}")
         
@@ -336,7 +336,7 @@ class MassiveDatasetManager:
         
         try:
             # Use streaming to avoid downloading entire dataset
-            dataset = load_dataset(dataset_name, streaming=True, split="train")
+            dataset = load_dataset(dataset_name, streaming=True, split="train", trust_remote_code=True)
             
             chunk_num = 1
             current_chunk_size = 0
@@ -453,41 +453,116 @@ class MassiveDatasetManager:
             if current_chunk_file:
                 current_chunk_file.close()
     
-    def extract_reddit_directory(self, directory_path: Path, chunk_size_mb: int = 100) -> List[Path]:
-        """Extract all .zst files from Reddit directory"""
-        logger.info(f"📦 Extracting Reddit directory: {directory_path}")
+    def extract_reddit_directory(self, directory_path: Path):
+        """Extract all Reddit .zst files from a directory"""
+        logger.info(f"📁 Extracting Reddit directory: {directory_path}")
         
         if not directory_path.exists():
             logger.error(f"❌ Directory not found: {directory_path}")
-            return []
+            return
         
         zst_files = list(directory_path.glob("*.zst"))
         if not zst_files:
             logger.error(f"❌ No .zst files found in {directory_path}")
-            return []
+            return
         
-        output_files = []
+        # Create output directory
+        output_dir = Path(self.base_dir) / "unified_raw"
+        output_dir.mkdir(exist_ok=True)
+        
         total_files = len(zst_files)
+        logger.info(f"📊 Found {total_files} .zst files to process")
         
-        logger.info(f"🔄 Processing {total_files} .zst files...")
-        
-        for i, zst_file in enumerate(zst_files, 1):
-            logger.info(f"📝 Processing file {i}/{total_files}: {zst_file.name}")
-            
+        processed = 0
+        for zst_file in zst_files:
             try:
-                # Extract individual .zst file
-                file_outputs = self.extract_reddit_data(zst_file, chunk_size_mb)
-                output_files.extend(file_outputs)
-                
-                if i % 10 == 0:  # Progress update every 10 files
-                    logger.info(f"📊 Progress: {i}/{total_files} files processed, {len(output_files)} chunks created")
-                    
+                logger.info(f"📄 Processing {zst_file.name} ({processed+1}/{total_files})")
+                self._extract_single_zst_file(zst_file, output_dir)
+                processed += 1
+                logger.success(f"✅ Completed {zst_file.name}")
             except Exception as e:
-                logger.error(f"❌ Error processing {zst_file.name}: {e}")
+                logger.error(f"❌ Failed to process {zst_file.name}: {e}")
                 continue
         
-        logger.success(f"✅ Reddit directory extracted: {len(output_files)} chunks from {total_files} files")
-        return output_files
+        logger.success(f"🎉 Extracted {processed}/{total_files} Reddit files to {output_dir}")
+    
+    def _extract_single_zst_file(self, zst_file: Path, output_dir: Path):
+        """Extract a single .zst file to JSONL format"""
+        import zstandard as zstd
+        
+        # Create output filename
+        base_name = zst_file.stem  # removes .zst extension
+        output_file = output_dir / f"{base_name}.jsonl"
+        
+        posts_written = 0
+        
+        with open(zst_file, 'rb') as f:
+            dctx = zstd.ZstdDecompressor()
+            with dctx.stream_reader(f) as reader:
+                with open(output_file, 'w', encoding='utf-8') as out_f:
+                    text_stream = reader.read().decode('utf-8', errors='ignore')
+                    
+                    for line in text_stream.split('\n'):
+                        if line.strip():
+                            try:
+                                data = json.loads(line)
+                                # Normalize the data format
+                                normalized = self._normalize_reddit_post(data, base_name)
+                                if normalized:
+                                    out_f.write(json.dumps(normalized) + '\n')
+                                    posts_written += 1
+                            except json.JSONDecodeError:
+                                continue
+        
+        logger.info(f"   💾 Wrote {posts_written:,} posts to {output_file.name}")
+    
+    def _normalize_reddit_post(self, data: Dict, filename: str) -> Optional[Dict]:
+        """Normalize Reddit post data to unified format"""
+        try:
+            # Extract subreddit from filename
+            if '_comments' in filename:
+                subreddit = filename.replace('_comments', '')
+                post_type = 'comment'
+            elif '_submissions' in filename:
+                subreddit = filename.replace('_submissions', '')
+                post_type = 'submission'
+            else:
+                subreddit = filename
+                post_type = 'unknown'
+            
+            # Create normalized format
+            normalized = {
+                'id': data.get('id', ''),
+                'subreddit': subreddit,
+                'type': post_type,
+                'author': data.get('author', '[deleted]'),
+                'created_utc': data.get('created_utc', 0),
+                'score': data.get('score', 0),
+                'text': '',
+                'title': data.get('title', ''),
+                'url': data.get('url', ''),
+                'num_comments': data.get('num_comments', 0)
+            }
+            
+            # Handle text content
+            if post_type == 'comment':
+                normalized['text'] = data.get('body', '')
+            else:
+                normalized['text'] = data.get('selftext', '')
+            
+            # Skip empty or deleted content
+            if not normalized['text'] or normalized['text'] in ['[deleted]', '[removed]']:
+                return None
+            
+            # Skip very short content
+            if len(normalized['text']) < 10:
+                return None
+            
+            return normalized
+            
+        except Exception as e:
+            logger.debug(f"Error normalizing post: {e}")
+            return None
     
     def create_massive_processing_script(self, plan: Dict) -> Path:
         """Create optimized processing script for massive dataset"""
@@ -643,8 +718,8 @@ if __name__ == "__main__":
 
 🚀 PROCESSING WORKFLOW:
    1. Extract Reddit data: python setup_massive_dataset.py --reddit YOUR_FILE
-   2. Extract HuggingFace: python setup_massive_dataset.py --huggingface
-   3. Process all data: python process_massive_dataset.py
+   2. Extract HuggingFace: python setup_massive_dataset.py --reddit-dir subreddits24 --huggingface --extract
+   3. Process: python process_massive_dataset.py
    4. Monitor progress: tail -f logs/massive_processing.log
 
 ⚡ PERFORMANCE OPTIMIZATIONS:
@@ -664,6 +739,63 @@ if __name__ == "__main__":
         
         return report
 
+    def show_unified_analysis(self, analysis: Dict):
+        """Display unified analysis of all data sources"""
+        logger.info("📋 UNIFIED DATASET ANALYSIS")
+        logger.info("=" * 50)
+        
+        total_size_gb = 0
+        total_records = 0
+        sources = []
+        
+        if 'reddit' in analysis and analysis['reddit']:
+            reddit = analysis['reddit']
+            total_size_gb += reddit['size_gb']
+            total_records += reddit['estimated_records']
+            sources.append(f"Reddit: {reddit['total_files']} files, {reddit['size_gb']:.1f}GB")
+            
+            logger.info(f"📱 REDDIT DATA:")
+            logger.info(f"   Files: {reddit['total_files']} .zst files")
+            logger.info(f"   Size: {reddit['size_gb']:.1f}GB")
+            logger.info(f"   Subreddits: {reddit['unique_subreddits']} unique")
+            logger.info(f"   Est. Records: {reddit['estimated_records']:,}")
+        
+        if 'huggingface' in analysis and analysis['huggingface']:
+            hf = analysis['huggingface']
+            total_size_gb += hf.get('estimated_size_gb', 0)
+            total_records += hf.get('estimated_records', 0)
+            sources.append(f"HuggingFace: {hf.get('estimated_records', 0):,} records")
+            
+            logger.info(f"🤗 HUGGINGFACE DATA:")
+            logger.info(f"   Dataset: {hf.get('dataset_name', 'Unknown')}")
+            logger.info(f"   Est. Size: {hf.get('estimated_size_gb', 0):.1f}GB")
+            logger.info(f"   Est. Records: {hf.get('estimated_records', 0):,}")
+        
+        # Processing estimates
+        logger.info(f"\n⚡ PROCESSING ESTIMATES:")
+        logger.info(f"   Total Input: {total_size_gb:.1f}GB")
+        logger.info(f"   Est. Records: {total_records:,}")
+        
+        # Time estimates based on system specs
+        extraction_time = max(1, total_size_gb * 0.5)  # ~30 minutes per GB
+        processing_time = max(2, total_records / 50000)  # ~50k records per hour
+        
+        logger.info(f"   Extraction Time: {extraction_time:.1f} hours")
+        logger.info(f"   Processing Time: {processing_time:.1f} hours")
+        logger.info(f"   Total Time: {extraction_time + processing_time:.1f} hours")
+        
+        # Output estimates
+        clean_size_gb = total_size_gb * 0.3  # ~30% of input size after cleaning
+        logger.info(f"   Est. Clean Output: {clean_size_gb:.1f}GB")
+        
+        logger.info(f"\n🚀 NEXT STEPS:")
+        if 'reddit' in analysis:
+            logger.info(f"   1. Extract: python setup_massive_dataset.py --reddit-dir subreddits24 --extract")
+        if 'huggingface' in analysis:
+            logger.info(f"   2. Include HF: python setup_massive_dataset.py --reddit-dir subreddits24 --huggingface --extract")
+        logger.info(f"   3. Process: python process_massive_dataset.py")
+        logger.info(f"   4. Monitor: python monitor_reddit_pipeline.py")
+
 def main():
     """Main setup function for massive datasets"""
     import argparse
@@ -671,102 +803,48 @@ def main():
     parser = argparse.ArgumentParser(description="Setup massive multi-source dataset for cleaning")
     parser.add_argument('--reddit', type=str, help='Path to Reddit dataset file')
     parser.add_argument('--reddit-dir', type=str, help='Path to directory containing Reddit .zst files')
-    parser.add_argument('--huggingface', action='store_true', help='Setup HuggingFace OpenWebText dataset')
-    parser.add_argument('--hf-dataset', type=str, default='Skylion007/openwebtext', help='HuggingFace dataset name')
-    parser.add_argument('--hf-samples', type=int, help='Limit HuggingFace samples (for testing)')
-    parser.add_argument('--analyze-only', action='store_true', help='Only analyze, don\'t extract')
-    parser.add_argument('--extract', action='store_true', help='Extract and prepare all datasets')
-    
+    parser.add_argument('--huggingface', action='store_true', help='Include HuggingFace OpenWebText dataset')
+    parser.add_argument('--extract', action='store_true', help='Extract and unify datasets')
+    parser.add_argument('--analyze-only', action='store_true', help='Only analyze datasets without processing')
+
     args = parser.parse_args()
     
+    # Initialize manager
     manager = MassiveDatasetManager()
-    sources = []
     
-    # Analyze Reddit dataset file if provided
+    reddit_path = None
     if args.reddit:
-        reddit_file = Path(args.reddit)
-        if reddit_file.exists():
-            reddit_analysis = manager.analyze_reddit_dataset(reddit_file)
-            if reddit_analysis:
-                sources.append(reddit_analysis)
-        else:
-            logger.error(f"❌ Reddit file not found: {reddit_file}")
-            return
+        reddit_path = Path(args.reddit)
+    elif args.reddit_dir:
+        reddit_path = Path(args.reddit_dir)
     
-    # Analyze Reddit directory if provided
-    if args.reddit_dir:
-        reddit_dir = Path(args.reddit_dir)
-        if reddit_dir.exists():
-            reddit_analysis = manager.analyze_reddit_directory(reddit_dir)
-            if reddit_analysis:
-                sources.append(reddit_analysis)
-        else:
-            logger.error(f"❌ Reddit directory not found: {reddit_dir}")
-            return
-    
-    # Analyze HuggingFace dataset if requested
-    if args.huggingface:
-        hf_analysis = manager.setup_huggingface_dataset(
-            dataset_name=args.hf_dataset,
-            streaming=True,
-            sample_size=args.hf_samples
-        )
-        if hf_analysis:
-            sources.append(hf_analysis)
-    
-    if not sources:
-        logger.error("❌ No data sources specified. Use --reddit, --reddit-dir, or --huggingface")
-        logger.info("💡 Usage examples:")
-        logger.info("  python setup_massive_dataset.py --reddit-dir subreddits24 --analyze-only")
-        logger.info("  python setup_massive_dataset.py --reddit-dir subreddits24 --huggingface --extract")
+    if args.analyze_only:
+        logger.info("🔍 ANALYSIS MODE - No data will be extracted")
+        analysis = {}
+        
+        if reddit_path:
+            if reddit_path.is_dir():
+                analysis['reddit'] = manager.analyze_reddit_directory(reddit_path)
+            else:
+                analysis['reddit'] = manager.analyze_reddit_dataset(reddit_path)
+        
+        if args.huggingface:
+            analysis['huggingface'] = manager.setup_huggingface_dataset()
+        
+        manager.show_unified_analysis(analysis)
         return
     
-    # Create processing plan
-    plan = manager.create_unified_processing_plan(sources)
-    
-    # Extract datasets if requested
-    if args.extract and not args.analyze_only:
-        logger.info("🔄 Starting data extraction...")
+    if args.extract:
+        if reddit_path:
+            if reddit_path.is_dir():
+                logger.info(f"📁 Processing Reddit directory: {reddit_path}")
+                manager.extract_reddit_directory(reddit_path)
+            else:
+                logger.info(f"📄 Processing Reddit file: {reddit_path}")
+                manager.extract_reddit_dataset(reddit_path)
         
-        for source in sources:
-            if source['source_type'] == 'reddit':
-                manager.extract_reddit_data(Path(source['file_path']))
-            elif source['source_type'] == 'reddit_directory':
-                manager.extract_reddit_directory(Path(source['directory_path']))
-            elif source['source_type'] == 'huggingface':
-                manager.extract_huggingface_data(
-                    source['dataset_name'], 
-                    max_samples=source.get('sample_size')
-                )
-    
-    # Create processing script
-    manager.create_massive_processing_script(plan)
-    
-    # Generate and display report
-    report = manager.generate_comprehensive_report(plan)
-    logger.info(report)
-    
-    # Save setup information
-    setup_info = {
-        'sources': sources,
-        'plan': plan,
-        'setup_date': datetime.now().isoformat(),
-        'system_specs': {
-            'memory_gb': manager.total_memory_gb,
-            'cpu_cores': manager.cpu_cores,
-            'disk_gb': manager.available_disk_gb
-        }
-    }
-    
-    with open('data/massive_dataset_setup.json', 'w') as f:
-        json.dump(setup_info, f, indent=2)
-    
-    logger.success("✅ Massive dataset setup complete!")
-    
-    if args.extract and not args.analyze_only:
-        logger.info("📋 Next: Run 'python process_massive_dataset.py' to start cleaning")
-    else:
-        logger.info("📋 Next: Add --extract flag to extract data, then run cleaning")
+        if args.huggingface:
+            manager.extract_huggingface_data("Skylion007/openwebtext")
 
 if __name__ == "__main__":
     main() 
