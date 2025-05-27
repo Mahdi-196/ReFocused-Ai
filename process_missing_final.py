@@ -4,7 +4,7 @@ import logging
 import numpy as np
 from pathlib import Path
 from tqdm import tqdm
-from transformers import AutoTokenizer
+from transformers import GPT2Tokenizer
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
@@ -13,7 +13,7 @@ def process_missing_files():
     logger.info("🚀 Processing missing files...")
     
     # Load tokenizer
-    tokenizer = AutoTokenizer.from_pretrained("models/tokenizer/transformers_tokenizer")
+    tokenizer = GPT2Tokenizer.from_pretrained("models/tokenizer/transformers_tokenizer")
     
     # Read missing files
     with open('missing_files_simple.txt', 'r') as f:
