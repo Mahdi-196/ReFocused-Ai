@@ -44,7 +44,9 @@ def process_missing_files():
             if sequences:
                 output_name = f"tokenized_{file_path.name.replace('.jsonl', '_part001.npz')}"
                 output_path = output_dir / output_name
-                np.savez_compressed(output_path, sequences=sequences)
+                # Convert to object array to handle variable-length sequences
+                sequences_array = np.array(sequences, dtype=object)
+                np.savez_compressed(output_path, sequences=sequences_array)
                 logger.info(f"✅ {file_path.name}: {len(sequences)} sequences")
         
         except Exception as e:
