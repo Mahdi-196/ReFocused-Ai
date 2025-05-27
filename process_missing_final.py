@@ -13,7 +13,7 @@ def process_missing_files():
     logger.info("🚀 Processing missing files...")
     
     # Load tokenizer
-    tokenizer = AutoTokenizer.from_pretrained("models/tokenizer")
+    tokenizer = AutoTokenizer.from_pretrained("models/tokenizer/transformers_tokenizer")
     
     # Read missing files
     with open('missing_files_simple.txt', 'r') as f:
