@@ -12,45 +12,70 @@ def debug_filenames():
     output_dir = Path("data_tokenized_production")
     
     print("🔍 DEBUGGING FILENAME PATTERNS")
-    print("=" * 50)
+    print("=" * 60)
     
-    # Show sample input files
-    print("📁 Sample input files:")
-    input_files = list(input_dir.glob("*.jsonl"))[:5]
-    for f in input_files:
-        print(f"  {f.name}")
-    print(f"  ... (total: {len(list(input_dir.glob('*.jsonl')))} files)")
+    # Get all files
+    input_files = list(input_dir.glob("*.jsonl"))
+    output_files = list(output_dir.glob("*.npz"))
+    
+    print(f"📁 Input files: {len(input_files)}")
+    print(f"📁 Output files: {len(output_files)}")
     print()
     
-    # Show sample output files
-    print("📁 Sample output files:")
-    if output_dir.exists():
-        output_files = list(output_dir.glob("*.npz"))[:10]
-        for f in output_files:
-            print(f"  {f.name}")
-        print(f"  ... (total: {len(list(output_dir.glob('*.npz')))} files)")
-        
-        # Analyze patterns
-        print("\n🔍 Analyzing filename patterns:")
-        for f in output_files[:3]:
-            filename = f.name
-            print(f"  Original: {filename}")
-            
-            # Try to extract base name
-            if filename.startswith("data_tokenized_"):
-                name_part = filename[len("data_tokenized_"):]
-                print(f"    After removing 'data_tokenized_': {name_part}")
-                
-                if "_part" in name_part:
-                    base_name = name_part.split("_part")[0]
-                    print(f"    Base name: {base_name}")
-                    print(f"    Would look for: {base_name}.jsonl")
-            print()
-            
-    else:
-        print("  Output directory doesn't exist!")
+    # Show sample patterns
+    print("📝 Sample input files:")
+    for f in input_files[:5]:
+        print(f"  {f.name}")
+    print()
     
-    print("=" * 50)
+    print("📝 Sample output files:")
+    for f in output_files[:5]:
+        print(f"  {f.name}")
+    print()
+    
+    # Test the matching logic
+    print("🔍 Testing filename matching:")
+    completed = set()
+    
+    for npz_file in output_files[:10]:  # Test first 10
+        filename = npz_file.name
+        print(f"  Output: {filename}")
+        
+        if filename.startswith("tokenized_cleaned_"):
+            name_part = filename[len("tokenized_cleaned_"):]
+            print(f"    After removing prefix: {name_part}")
+            
+            if "_part" in name_part:
+                original_name = name_part.split("_part")[0]
+                expected_input = f"cleaned_{original_name}.jsonl"
+                print(f"    Looking for input: {expected_input}")
+                
+                # Check if this input file exists
+                input_path = input_dir / expected_input
+                if input_path.exists():
+                    print(f"    ✅ FOUND: {expected_input}")
+                    completed.add(expected_input)
+                else:
+                    print(f"    ❌ NOT FOUND: {expected_input}")
+                    
+                    # Try alternative patterns
+                    alt_patterns = [
+                        f"{original_name}.jsonl",
+                        f"cleaned_{original_name}_part001.jsonl",
+                        f"{original_name}_part001.jsonl"
+                    ]
+                    
+                    for alt in alt_patterns:
+                        alt_path = input_dir / alt
+                        if alt_path.exists():
+                            print(f"    🔍 Alternative found: {alt}")
+                            break
+                    else:
+                        print(f"    🤔 No alternatives found")
+        print()
+    
+    print(f"📊 Matched so far: {len(completed)} files")
+    print("=" * 60)
 
 if __name__ == "__main__":
     debug_filenames() 
