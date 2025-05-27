@@ -109,17 +109,17 @@ class ResumeTokenizer:
         # Look for .npz files in output directory
         for npz_file in self.output_dir.glob("*.npz"):
             # Extract original filename from tokenized filename
-            # Format: data_tokenized_tokenized_cleaned_[ORIGINAL_NAME]_part[N].npz
+            # Format: tokenized_cleaned_[ORIGINAL_NAME]_part[N].npz
             filename = npz_file.name
             
             # Remove prefix and suffix to get original name
-            if filename.startswith("data_tokenized_tokenized_cleaned_"):
+            if filename.startswith("tokenized_cleaned_"):
                 # Remove prefix
-                name_part = filename[len("data_tokenized_tokenized_cleaned_"):]
+                name_part = filename[len("tokenized_cleaned_"):]
                 # Remove part and extension
                 if "_part" in name_part:
                     original_name = name_part.split("_part")[0]
-                    completed.add(f"{original_name}.jsonl")
+                    completed.add(f"cleaned_{original_name}.jsonl")
         
         self.logger.info(f"Found {len(completed)} already completed files")
         return completed
@@ -305,7 +305,7 @@ class ResumeTokenizer:
                 # Save results
                 if all_sequences:
                     base_name = file_path.stem
-                    output_path = self.output_dir / f"data_tokenized_tokenized_cleaned_{base_name}_part001.npz"
+                    output_path = self.output_dir / f"tokenized_{base_name}_part001.npz"
                     saved_count = self.save_tokenized_data(all_sequences, output_path)
                     stats['total_sequences'] = saved_count
                     stats['success'] = True
