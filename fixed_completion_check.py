@@ -6,7 +6,7 @@ def check_completion_status():
     input_dir = Path("data/cleaned")
     output_dir = Path("data_tokenized_production")
     
-    print("🔍 FIXED COMPLETION CHECK")
+    print("🔍 FIXED COMPLETION CHECK v2")
     print("=" * 40)
     
     # Get all input files
@@ -18,25 +18,20 @@ def check_completion_status():
     output_files = list(output_dir.glob("*.npz"))
     print(f"💾 Total output files: {len(output_files)}")
     
-    # Fixed mapping logic
+    # Fixed mapping logic - don't remove _part001 from output names
     completed_inputs = set()
     
     for output_file in output_files:
-        # Handle pattern: tokenized_cleaned_X_part001.npz → cleaned_X.jsonl
+        # Handle pattern: tokenized_cleaned_X.npz → cleaned_X.jsonl
+        # OR: tokenized_cleaned_X_part001.npz → cleaned_X_part001.jsonl
         name = output_file.stem
         
         if name.startswith('tokenized_'):
-            # Remove 'tokenized_' prefix
+            # Remove 'tokenized_' prefix only
             without_prefix = name[10:]
             
-            # Remove '_part001' suffix if present
-            if without_prefix.endswith('_part001'):
-                without_suffix = without_prefix[:-8]  # Remove '_part001'
-            else:
-                without_suffix = without_prefix
-                
-            # Add .jsonl extension
-            input_name = without_suffix + '.jsonl'
+            # Add .jsonl extension (keep any _part001 suffixes)
+            input_name = without_prefix + '.jsonl'
             
             # Check if this input file exists
             if input_name in input_names:
@@ -69,11 +64,7 @@ def check_completion_status():
         name = output_file.stem
         if name.startswith('tokenized_'):
             without_prefix = name[10:]
-            if without_prefix.endswith('_part001'):
-                without_suffix = without_prefix[:-8]
-            else:
-                without_suffix = without_prefix
-            expected_input = without_suffix + '.jsonl'
+            expected_input = without_prefix + '.jsonl'
             exists = expected_input in input_names
             print(f"   {output_file.name} → {expected_input} (exists: {exists})")
     
