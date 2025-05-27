@@ -109,17 +109,17 @@ class ResumeTokenizer:
         # Look for .npz files in output directory
         for npz_file in self.output_dir.glob("*.npz"):
             # Extract original filename from tokenized filename
-            # Format: tokenized_cleaned_[ORIGINAL_NAME]_part[N].npz
+            # Format: tokenized_cleaned_[ORIGINAL_NAME].npz
             filename = npz_file.name
             
             # Remove prefix and suffix to get original name
-            if filename.startswith("tokenized_cleaned_"):
-                # Remove prefix
-                name_part = filename[len("tokenized_cleaned_"):]
-                # Remove part and extension
-                if "_part" in name_part:
-                    original_name = name_part.split("_part")[0]
-                    completed.add(f"cleaned_{original_name}.jsonl")
+            if filename.startswith("tokenized_"):
+                # Remove "tokenized_" prefix and ".npz" suffix
+                # tokenized_cleaned_NAME.npz -> cleaned_NAME.jsonl
+                original_name = filename[len("tokenized_"):]
+                if original_name.endswith(".npz"):
+                    original_name = original_name[:-4]  # Remove .npz
+                completed.add(f"{original_name}.jsonl")
         
         self.logger.info(f"Found {len(completed)} already completed files")
         return completed

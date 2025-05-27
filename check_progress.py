@@ -24,12 +24,13 @@ def check_progress():
     if output_dir.exists():
         for npz_file in output_dir.glob("*.npz"):
             filename = npz_file.name
-            if filename.startswith("tokenized_cleaned_"):
-                # Remove "tokenized_cleaned_" prefix
-                name_part = filename[len("tokenized_cleaned_"):]
-                if "_part" in name_part:
-                    original_name = name_part.split("_part")[0]
-                    completed.add(f"cleaned_{original_name}.jsonl")
+            if filename.startswith("tokenized_"):
+                # Remove "tokenized_" prefix and ".npz" suffix
+                # tokenized_cleaned_NAME.npz -> cleaned_NAME.jsonl
+                original_name = filename[len("tokenized_"):]
+                if original_name.endswith(".npz"):
+                    original_name = original_name[:-4]  # Remove .npz
+                completed.add(f"{original_name}.jsonl")
     
     completed_count = len(completed)
     remaining_count = total_files - completed_count
