@@ -1,0 +1,52 @@
+# HYPERBOLIC SERVER QUICK LAUNCH COMMANDS
+# Copy-paste these commands for immediate training
+
+# 1. BASIC SETUP (after SSH connection)
+git clone https://github.com/Mahdi-196/ReFocused-Ai.git
+cd ReFocused-Ai
+
+# 2. CONDA SETUP
+wget https://repo.anaconda.com/miniconda/Miniconda3-latest-Linux-x86_64.sh
+bash Miniconda3-latest-Linux-x86_64.sh -b
+source ~/miniconda3/bin/activate
+conda create -n refocused python=3.9 -y
+conda activate refocused
+
+# 3. ESSENTIAL PACKAGES
+pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121
+pip install deepspeed transformers accelerate wandb tensorboard
+pip install google-cloud-storage requests numpy pyyaml
+
+# 4. QUICK VERIFICATION
+python -c "import torch; print(f'CUDA: {torch.cuda.is_available()}, GPUs: {torch.cuda.device_count()}')"
+nvidia-smi
+
+# 5. START TRAINING (all-in-one command)
+python server_launch_kit.py
+
+# ============================================
+# MANUAL STEP-BY-STEP ALTERNATIVE:
+# ============================================
+
+# Download data only:
+python fixed_download.py
+
+# Start training only:
+cd 05_model_training
+python train.py --config configs/training_config.yaml --data-path ../data/training
+
+# ============================================
+# MONITORING COMMANDS:
+# ============================================
+
+# Watch training logs:
+tail -f logs/training.log
+
+# Monitor GPUs:
+nvidia-smi -l 1
+
+# Check training progress:
+ls -la checkpoints/
+
+# Stop training gracefully:
+pkill -f train.py 
