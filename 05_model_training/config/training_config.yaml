@@ -1,0 +1,104 @@
+# Training Configuration for 1B Parameter Model on 8x H100 SXM
+# Optimized for cost efficiency and maximum performance
+
+# Model Configuration
+model:
+  config_path: "config/model_config.json"
+  vocab_size: 50000
+  max_position_embeddings: 2048
+  
+# Training Parameters
+training:
+  total_steps: 100000
+  max_epochs: 1
+  save_steps: 1000
+  eval_steps: 5000
+  logging_steps: 100
+  warmup_steps: 2000
+  
+  # Batch Size Configuration (Total: 4 * 16 * 8 = 512)
+  per_device_train_batch_size: 4
+  gradient_accumulation_steps: 16
+  dataloader_num_workers: 4
+  dataloader_prefetch_factor: 2
+  
+  # Learning Rate
+  learning_rate: 3e-4
+  weight_decay: 0.1
+  lr_scheduler_type: "cosine"
+  warmup_ratio: 0.02
+  
+  # Mixed Precision
+  fp16: true
+  bf16: false
+  gradient_checkpointing: true
+  
+# Data Configuration
+data:
+  # Google Cloud Storage paths
+  remote_data_bucket: "refocused-ai"
+  remote_data_path: "tokenized_data"
+  
+  # Local staging paths
+  local_data_dir: "/scratch/shards"
+  local_cache_dir: "/scratch/cache"
+  
+  # Data loading
+  max_seq_length: 2048
+  preprocessing_num_workers: 8
+  
+# Checkpointing & Storage
+checkpointing:
+  output_dir: "/scratch/checkpoints"
+  remote_checkpoint_bucket: "refocused-ai"
+  remote_checkpoint_path: "checkpoints"
+  
+  # Backup frequency
+  backup_every_n_steps: 1000
+  keep_last_n_checkpoints: 5
+  save_total_limit: 10
+  
+# Monitoring & Logging
+monitoring:
+  wandb_project: "refocused-ai-1b-training"
+  wandb_entity: null
+  report_to: ["wandb", "tensorboard"]
+  logging_dir: "/scratch/logs"
+  
+  # Performance monitoring
+  monitor_gpu_memory: true
+  monitor_system_metrics: true
+  log_gpu_metrics_interval: 60  # seconds
+  
+# Hardware Configuration
+hardware:
+  num_gpus: 8
+  gpu_type: "H100_SXM"
+  node_type: "single_node"
+  
+  # Memory optimization
+  nvme_offload_dir: "/scratch/deepspeed_nvme"
+  cpu_offload: true
+  
+# DeepSpeed Configuration
+deepspeed:
+  config_path: "config/deepspeed_config.json"
+  zero_stage: 3
+  cpu_offload_optimizer: true
+  cpu_offload_params: true
+  
+# Tokenizer
+tokenizer:
+  path: "../tokenizer_750M"
+  padding_side: "right"
+  truncation_side: "right"
+  
+# Environment
+environment:
+  seed: 42
+  cuda_visible_devices: "0,1,2,3,4,5,6,7"
+  nccl_debug: "INFO"
+  
+  # Optimization flags
+  torch_compile: false  # Disable for DeepSpeed compatibility
+  torch_backends_cudnn_benchmark: true 
