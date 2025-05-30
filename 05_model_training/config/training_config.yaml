@@ -6,6 +6,8 @@ model:
   config_path: "config/model_config.json"
   vocab_size: 50000
   max_position_embeddings: 2048
+  vocab_size_scan_files: 0    # New: Number of .npz files to scan for max_token_id (0 to disable)
+  vocab_size_scan_data_dir: null # New: Dir for vocab scan, null to use data.local_data_dir
   
 # Training Parameters
 training:
@@ -38,6 +40,8 @@ data:
   # Google Cloud Storage paths
   remote_data_bucket: "refocused-ai"
   remote_data_path: "tokenized_data"
+  use_gcs: true
+  gcs_read_client_type: "anonymous" # Changed from gcs_client_type, set to anonymous for public downloads
   
   # Local staging paths
   local_data_dir: "/scratch/shards"
@@ -46,6 +50,7 @@ data:
   # Data loading
   max_seq_length: 2048
   preprocessing_num_workers: 8
+  npz_key_priority: ["input_ids", "arr_0", "sequences", "text"] # New: Priority of keys to look for in .npz files
   
 # Checkpointing & Storage
 checkpointing:
