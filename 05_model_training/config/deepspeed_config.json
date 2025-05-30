@@ -6,7 +6,7 @@
   "wall_clock_breakdown": false,
   
   "optimizer": {
-    "type": "AdamW",
+    "type": "FusedAdam",
     "params": {
       "lr": 3e-4,
       "betas": [0.9, 0.95],
@@ -20,8 +20,8 @@
     "params": {
       "warmup_min_lr": 1e-6,
       "warmup_max_lr": 3e-4,
-      "warmup_num_steps": 2000,
-      "total_num_steps": 100000
+      "warmup_num_steps": 2,
+      "total_num_steps": 25
     }
   },
   
@@ -29,11 +29,11 @@
     "stage": 3,
     "offload_optimizer": {
       "device": "cpu",
-      "nvme_path": "/scratch/deepspeed_nvme"
+      "nvme_path": "/home/ubuntu/training_data/deepspeed_nvme"
     },
     "offload_param": {
       "device": "cpu",
-      "nvme_path": "/scratch/deepspeed_nvme"
+      "nvme_path": "/home/ubuntu/training_data/deepspeed_nvme"
     },
     "overlap_comm": true,
     "contiguous_gradients": true,
@@ -47,14 +47,8 @@
     "round_robin_gradients": true
   },
   
-  "fp16": {
-    "enabled": true,
-    "auto_cast": false,
-    "loss_scale": 0,
-    "initial_scale_power": 16,
-    "loss_scale_window": 1000,
-    "hysteresis": 2,
-    "min_loss_scale": 1
+  "bf16": {
+    "enabled": true
   },
   
   "activation_checkpointing": {

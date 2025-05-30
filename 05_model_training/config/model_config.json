@@ -3,7 +3,7 @@
   "vocab_size": 50000,
   "n_positions": 2048,
   "n_embd": 1536,
-  "n_layer": 24,
+  "n_layer": 40,
   "n_head": 24,
   "n_inner": 6144,
   "activation_function": "gelu_new",
@@ -23,5 +23,6 @@
   "eos_token_id": 50256,
   "scale_attn_by_inverse_layer_idx": false,
   "reorder_and_upcast_attn": false,
-  "architectures": ["GPT2LMHeadModel"]
+  "architectures": ["GPT2LMHeadModel"],
+  "attn_implementation": "flash_attention_2"
 } 
