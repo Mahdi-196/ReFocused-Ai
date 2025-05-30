@@ -41,6 +41,11 @@ def download_blob(bucket, blob, local_dir):
         logger.error(f"Failed to download {blob.name}: {e}")
         return False
 
+def list_bucket_prefixes(bucket, delimiter='/'):
+    """List all top-level prefixes (folders) in a bucket"""
+    prefixes = bucket.list_blobs(delimiter=delimiter)
+    return [prefix.prefix for prefix in prefixes.prefixes]
+
 def download_data(bucket_name, remote_path, local_dir, max_workers=8, max_files=None, anonymous=True):
     """Download training data from GCS with parallel downloads"""
     try:
@@ -64,11 +69,28 @@ def download_data(bucket_name, remote_path, local_dir, max_workers=8, max_files=
         # Filter for .npz files
         npz_blobs = [b for b in blobs if b.name.endswith('.npz')]
         
+        # If no files found, try to list available prefixes
+        if not npz_blobs:
+            logger.warning(f"No .npz files found in gs://{bucket_name}/{remote_path}")
+            logger.info("Checking available top-level directories in the bucket...")
+            try:
+                prefixes = list_bucket_prefixes(bucket)
+                if prefixes:
+                    logger.info(f"Available prefixes in the bucket: {prefixes}")
+                    logger.info("Try using one of these prefixes with the --remote_path argument")
+                else:
+                    logger.info("No prefixes found in the bucket")
+            except Exception as e:
+                logger.error(f"Error listing bucket prefixes: {e}")
+        
         if max_files:
             npz_blobs = npz_blobs[:max_files]
             logger.info(f"Limited to {max_files} files")
         
         logger.info(f"Found {len(npz_blobs)} .npz files to download")
+        
+        if not npz_blobs:
+            return False
         
         # Download files in parallel
         start_time = time.time()
@@ -81,13 +103,15 @@ def download_data(bucket_name, remote_path, local_dir, max_workers=8, max_files=
         success_count = sum(results)
         duration = time.time() - start_time
         
-        logger.info(f"Downloaded {success_count}/{len(npz_blobs)} files in {duration:.1f}s")
-        logger.info(f"Average speed: {sum([b.size for b in npz_blobs]) / (1024 * 1024 * duration):.2f} MB/s")
+        if success_count > 0:
+            logger.info(f"Downloaded {success_count}/{len(npz_blobs)} files in {duration:.1f}s")
+            logger.info(f"Average speed: {sum([b.size for b in npz_blobs]) / (1024 * 1024 * duration):.2f} MB/s")
         
-        return success_count == len(npz_blobs)
+        return success_count > 0
     
     except Exception as e:
         logger.error(f"Error downloading data: {e}")
+        logger.error("Please ensure the bucket exists and is publicly accessible")
         return False
 
 def main():
@@ -104,6 +128,8 @@ def main():
                       help="Maximum number of files to download (None for all)")
     parser.add_argument("--anonymous", action="store_true", default=True,
                       help="Use anonymous access (for public buckets)")
+    parser.add_argument("--list-only", action="store_true",
+                      help="Just list files without downloading")
     
     args = parser.parse_args()
     
@@ -122,7 +148,7 @@ def main():
         logger.info("Download completed successfully")
         return 0
     else:
-        logger.error("Download failed")
+        logger.error("Download failed - no files were downloaded")
         return 1
 
 if __name__ == "__main__":

@@ -174,3 +174,126 @@ Expected training results:
 **Expected total cost: $275-320 over 35-40 hours**
 
 Good luck! 🎯 
+
+# H100 Training Launch Checklist
+
+Use this checklist to ensure your H100 training run is properly set up and optimized.
+
+## 📋 Pre-Launch Checklist
+
+- [ ] SSH into your instance:
+  ```bash
+  ssh ubuntu@illegal-primrose-mastodon.1.cricket.hyperbolic.xyz -p 31870
+  ```
+
+- [ ] Clone repository:
+  ```bash
+  git clone https://github.com/Mahdi-196/ReFocused-Ai.git
+  cd ReFocused-Ai
+  ```
+
+- [ ] Run the setup script:
+  ```bash
+  cd 05_model_training
+  python3 setup_h100_env.py
+  ```
+
+## 🔍 Verification Steps
+
+- [ ] Check CUDA is available:
+  ```bash
+  python3 -c "import torch; print(f'CUDA available: {torch.cuda.is_available()}')"
+  ```
+
+- [ ] Verify GPU count:
+  ```bash
+  python3 -c "import torch; print(f'GPU count: {torch.cuda.device_count()}')"
+  ```
+
+- [ ] Check GPU memory:
+  ```bash
+  nvidia-smi
+  ```
+
+- [ ] Verify directories exist:
+  ```bash
+  ls -la /home/ubuntu/training_data/
+  ls -la ../models/gpt_750m/
+  ls -la ../models/tokenizer/tokenizer/
+  ```
+
+- [ ] Verify data downloaded:
+  ```bash
+  ls -la /home/ubuntu/training_data/shards
+  ```
+
+## 🚀 Launch Commands
+
+- [ ] Run single-GPU test:
+  ```bash
+  bash h100_runner.sh test
+  ```
+
+- [ ] Run full 8-GPU training:
+  ```bash
+  bash h100_runner.sh full
+  ```
+
+## 📊 Monitoring
+
+- [ ] TensorBoard:
+  ```
+  http://illegal-primrose-mastodon-6006.1.cricket.hyperbolic.xyz:30000
+  ```
+
+- [ ] Jupyter (if set up):
+  ```
+  http://illegal-primrose-mastodon-8888.1.cricket.hyperbolic.xyz:30000
+  ```
+
+- [ ] Check training logs:
+  ```bash
+  tail -f /home/ubuntu/training_data/logs/latest.log
+  ```
+
+- [ ] Monitor GPU usage:
+  ```bash
+  watch -n 1 nvidia-smi
+  ```
+
+## 🔄 Troubleshooting
+
+### If CUDA out of memory:
+- [ ] Reduce batch size in config/h100_multi_gpu.yaml
+- [ ] Increase gradient accumulation steps
+- [ ] Enable gradient checkpointing
+
+### If download fails:
+- [ ] Check bucket name and prefix
+- [ ] Try listing available prefixes
+- [ ] Manually check Google Cloud Storage web console
+
+### If DeepSpeed fails:
+- [ ] Check config/h100_deepspeed_multi.json
+- [ ] Verify that all 8 GPUs are visible
+- [ ] Set environment variables:
+  ```bash
+  export RDMAV_FORK_SAFE=1
+  export FI_EFA_FORK_SAFE=1
+  export NCCL_IB_DISABLE=1
+  export NCCL_P2P_DISABLE=1
+  ```
+
+## 💾 Checkpoint Management
+
+- [ ] Upload checkpoint:
+  ```bash
+  bash h100_runner.sh upload /home/ubuntu/training_data/checkpoints/checkpoint_step_1000
+  ```
+
+- [ ] Check upload status:
+  ```bash
+  gsutil ls gs://refocused-ai/Checkpoints/
+  ```
+
+Good luck with your training run! 🚀 
