@@ -15,6 +15,7 @@ from pathlib import Path
 from typing import Dict, Any, Optional
 import signal
 import atexit
+import numpy as np
 
 import torch
 import torch.nn.functional as F
@@ -24,7 +25,7 @@ from transformers import (
     set_seed
 )
 import deepspeed
-from deepspeed.utils.zero_to_fp32 import save_fp32_model
+# from deepspeed.utils.zero_to_fp32 import save_fp32_model # Not used, caused import error
 import wandb
 
 # Import custom utilities
@@ -39,7 +40,7 @@ logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     handlers=[
         logging.StreamHandler(),
-        logging.FileHandler('/scratch/logs/training.log')
+        # logging.FileHandler('/scratch/logs/training.log') # To be configured via ModelTrainer
     ]
 )
 logger = logging.getLogger(__name__)
@@ -79,7 +80,8 @@ class ModelTrainer:
         """Setup training environment and variables"""
         # Set environment variables
         env_config = self.config.get('environment', {})
-        
+        self.global_config = self.config # Store full config for later use
+
         if 'cuda_visible_devices' in env_config:
             os.environ['CUDA_VISIBLE_DEVICES'] = env_config['cuda_visible_devices']
         
@@ -98,23 +100,97 @@ class ModelTrainer:
     def setup_model_and_tokenizer(self):
         """Initialize model and tokenizer"""
         # Load model configuration
-        model_config_path = Path(self.config['model']['config_path'])
+        model_cfg = self.config['model']
+        model_config_path = Path(model_cfg['config_path'])
         with open(model_config_path, 'r') as f:
             model_config_dict = json.load(f)
-        
+
         self.model_config = GPT2Config(**model_config_dict)
-        
+
         # Initialize tokenizer
         tokenizer_path = self.config['tokenizer']['path']
         self.tokenizer = GPT2Tokenizer.from_pretrained(tokenizer_path)
-        
+
         # Set special tokens
         if self.tokenizer.pad_token is None:
             self.tokenizer.pad_token = self.tokenizer.eos_token
+
+        # Determine vocab_size
+        # Option 1: Use tokenizer's vocab size (default)
+        determined_vocab_size = len(self.tokenizer)
+
+        # Option 2: Scan data to determine vocab_size if configured
+        if model_cfg.get('vocab_size_scan_files', 0) > 0:
+            scan_data_dir = model_cfg.get('vocab_size_scan_data_dir', self.config['data']['local_data_dir'])
+            num_scan_files = model_cfg.get('vocab_size_scan_files')
+            logger.info(f"Scanning up to {num_scan_files} files in {scan_data_dir} to determine max token ID for vocab_size.")
+            
+            max_token_id = 0
+            files_scanned = 0
+            # Ensure GCS data is synced if scanning from local_data_dir and GCS is used
+            if self.config['data'].get('use_gcs', True) and scan_data_dir == self.config['data']['local_data_dir']:
+                 if not hasattr(self, 'gcs_manager') or not self.gcs_manager: # if gcs_manager not setup
+                    logger.info("Temporarily initializing GCSDataManager for vocab scan...")
+                    temp_gcs_manager = GCSDataManager(
+                        bucket_name=self.config['data']['remote_data_bucket'],
+                        remote_path=self.config['data']['remote_data_path'],
+                        local_path=self.config['data']['local_data_dir'],
+                        use_gcs=self.config['data'].get('use_gcs', True),
+                        gcs_client_type=self.config['data'].get('gcs_client_type', 'default')
+                    )
+                    if temp_gcs_manager.use_gcs: # only sync if GCS is actually enabled
+                        logger.info("Syncing data for vocab scan...")
+                        sync_success = temp_gcs_manager.sync_data_to_local(max_workers=self.config['data'].get('preprocessing_num_workers', 8))
+                        if not sync_success:
+                            logger.warning("Failed to sync all data for vocab scan. Scan might be incomplete.")
+                    else:
+                        logger.info("GCS usage is disabled, skipping sync for vocab scan.")
+
+
+            npz_key_priority = self.config['data'].get('npz_key_priority', ['input_ids', 'arr_0', 'text', 'sequences'])
+
+            try:
+                for i, file_path in enumerate(Path(scan_data_dir).glob("*.npz")) :
+                    if i >= num_scan_files:
+                        break
+                    try:
+                        with np.load(file_path, allow_pickle=True) as data: # allow_pickle for safety during scan
+                            found_key = None
+                            for key_candidate in npz_key_priority:
+                                if key_candidate in data:
+                                    found_key = key_candidate
+                                    break
+                            if not found_key and data.files: # fallback to first key
+                                found_key = data.files[0]
+                            
+                            if found_key:
+                                current_max = np.max(data[found_key])
+                                if current_max > max_token_id:
+                                    max_token_id = current_max
+                                files_scanned +=1
+                            else:
+                                logger.warning(f"Could not find suitable data key in {file_path} for vocab scan.")
+                    except Exception as e:
+                        logger.warning(f"Could not load or process {file_path} for vocab scan: {e}")
+                if files_scanned > 0:
+                    determined_vocab_size = int(max_token_id) + 1
+                    logger.info(f"Determined vocab_size={determined_vocab_size} after scanning {files_scanned} files (max_token_id={max_token_id}).")
+                else:
+                    logger.warning("No files successfully scanned for vocab_size. Using tokenizer default.")
+
+            except Exception as e:
+                logger.error(f"Error during vocab_size scan: {e}. Using tokenizer default.")
         
-        # Update vocab size in config to match tokenizer
-        self.model_config.vocab_size = len(self.tokenizer)
-        
+        # Override model_config_dict vocab_size if it was explicitly set (e.g. from model_config.json)
+        # and not meant to be auto-detected. If vocab_size_scan_files is 0, respect model_cfg.vocab_size
+        if model_cfg.get('vocab_size_scan_files', 0) == 0 and 'vocab_size' in model_cfg:
+             self.model_config.vocab_size = model_cfg['vocab_size']
+             logger.info(f"Using explicitly configured vocab_size: {self.model_config.vocab_size} from training_config.yaml")
+        else:
+            self.model_config.vocab_size = determined_vocab_size
+            logger.info(f"Final vocab_size set to: {self.model_config.vocab_size}")
+
+
         # Initialize model
         self.model = GPT2LMHeadModel(self.model_config)
         
@@ -129,27 +205,36 @@ class ModelTrainer:
         """Setup data loading and GCS synchronization"""
         data_config = self.config['data']
         
-        # Initialize GCS data manager
-        self.gcs_manager = GCSDataManager(
-            bucket_name=data_config['remote_data_bucket'],
-            remote_path=data_config['remote_data_path'],
-            local_path=data_config['local_data_dir']
-        )
-        
-        # Sync data from GCS to local storage
-        logger.info("Syncing training data from GCS...")
-        sync_success = self.gcs_manager.sync_data_to_local(max_workers=8)
-        
-        if not sync_success:
-            raise RuntimeError("Failed to sync training data from GCS")
-        
+        # Initialize GCS data manager if not already done by vocab scan
+        if not hasattr(self, 'gcs_manager') or not self.gcs_manager:
+            self.gcs_manager = GCSDataManager(
+                bucket_name=data_config['remote_data_bucket'],
+                remote_path=data_config['remote_data_path'],
+                local_path=data_config['local_data_dir'],
+                use_gcs=data_config.get('use_gcs', True), # Default to True if not specified
+                gcs_client_type=data_config.get('gcs_client_type', 'default') # Default to 'default'
+            )
+
+        # Sync data from GCS to local storage if GCS is enabled
+        if self.gcs_manager.use_gcs:
+            logger.info("Syncing training data from GCS...")
+            sync_success = self.gcs_manager.sync_data_to_local(
+                max_workers=data_config.get('preprocessing_num_workers', 8) # Use existing preprocessing_num_workers
+            )
+            if not sync_success:
+                # Decide if this is fatal. For now, we'll allow training on partial data.
+                logger.warning("Failed to sync all training data from GCS. Training may proceed with local data.")
+        else:
+            logger.info("GCS usage is disabled. Skipping data sync from GCS.")
+            
         # Create data loader
         self.train_dataloader = create_dataloader(
             data_dir=data_config['local_data_dir'],
             batch_size=self.config['training']['per_device_train_batch_size'],
             sequence_length=data_config['max_seq_length'],
             num_workers=self.config['training']['dataloader_num_workers'],
-            prefetch_factor=self.config['training']['dataloader_prefetch_factor']
+            prefetch_factor=self.config['training']['dataloader_prefetch_factor'],
+            npz_key_priority=data_config.get('npz_key_priority', ['input_ids', 'arr_0', 'text', 'sequences']) # Pass key priority
         )
         
         logger.info("Data loading setup completed")
@@ -159,7 +244,13 @@ class ModelTrainer:
         monitoring_config = self.config['monitoring']
         
         # Create logs directory
-        os.makedirs(monitoring_config['logging_dir'], exist_ok=True)
+        log_dir = Path(monitoring_config['logging_dir'])
+        log_dir.mkdir(parents=True, exist_ok=True)
+
+        # Add file handler for training.log
+        file_handler = logging.FileHandler(log_dir / 'training.log')
+        file_handler.setFormatter(logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s'))
+        logging.getLogger().addHandler(file_handler) # Add to root logger
         
         # Initialize Weights & Biases
         if 'wandb' in monitoring_config['report_to']:
@@ -411,12 +502,36 @@ def main():
                        help="Local rank for distributed training")
     
     args = parser.parse_args()
+
+    # Load config early to make paths available for directory creation
+    temp_config = {}
+    try:
+        with open(args.config, 'r') as f:
+            temp_config = yaml.safe_load(f)
+    except Exception as e:
+        print(f"Error loading config for directory setup: {e}. Using defaults if any.")
+        # Allow to proceed, ModelTrainer will eventually fail if config is truly broken
+
+    # Setup directories based on config
+    # These are base directories; specific subdirectories (like for checkpoints)
+    # will be handled by their respective managers/components.
     
-    # Setup directories
-    os.makedirs("/scratch/logs", exist_ok=True)
-    os.makedirs("/scratch/checkpoints", exist_ok=True)
-    os.makedirs("/scratch/shards", exist_ok=True)
-    os.makedirs("/scratch/deepspeed_nvme", exist_ok=True)
+    # Log directory (primary, others might be inside ModelTrainer)
+    log_dir_path = Path(temp_config.get('monitoring', {}).get('logging_dir', 'logs')) # Default to 'logs'
+    log_dir_path.mkdir(parents=True, exist_ok=True)
+    
+    # Local data directory (where shards are expected)
+    local_data_dir_path = Path(temp_config.get('data', {}).get('local_data_dir', 'data/shards')) # Default
+    local_data_dir_path.mkdir(parents=True, exist_ok=True)
+
+    # Checkpoints output directory (base)
+    checkpoints_base_path = Path(temp_config.get('checkpointing', {}).get('output_dir', 'checkpoints')) # Default
+    checkpoints_base_path.mkdir(parents=True, exist_ok=True)
+
+    # DeepSpeed NVMe offload directory (if specified and used)
+    nvme_offload_dir_config = temp_config.get('hardware', {}).get('nvme_offload_dir')
+    if nvme_offload_dir_config:
+        Path(nvme_offload_dir_config).mkdir(parents=True, exist_ok=True)
     
     # Initialize trainer
     trainer = ModelTrainer(

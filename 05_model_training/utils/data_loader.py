@@ -26,12 +26,14 @@ class TokenizedDataset(IterableDataset):
         data_dir: str,
         sequence_length: int = 2048,
         cache_size: int = 10,  # Number of files to keep in memory
-        prefetch_factor: int = 2
+        prefetch_factor: int = 2,
+        npz_key_priority: Optional[List[str]] = None # Added for flexible key selection
     ):
         self.data_dir = Path(data_dir)
         self.sequence_length = sequence_length
         self.cache_size = cache_size
         self.prefetch_factor = prefetch_factor
+        self.npz_key_priority = npz_key_priority if npz_key_priority else ['input_ids', 'arr_0', 'text', 'sequences']
         
         # Find all .npz files
         self.file_paths = list(self.data_dir.glob("*.npz"))
@@ -58,13 +60,37 @@ class TokenizedDataset(IterableDataset):
             
             # Load file
             try:
-                data = np.load(file_path)
-                # Assume the key is 'input_ids' or the first key
-                if 'input_ids' in data:
-                    sequences = data['input_ids']
-                else:
-                    sequences = data[list(data.keys())[0]]
+                sequences = None
+                # Attempt 1: Load with allow_pickle=False
+                try:
+                    data = np.load(file_path, allow_pickle=False)
+                except ValueError as e:
+                    if "allow_pickle=True" in str(e):
+                        logger.warning(f"Failed to load {file_path} with allow_pickle=False, retrying with allow_pickle=True. Error: {e}")
+                        data = np.load(file_path, allow_pickle=True)
+                    else:
+                        raise # Re-raise if it's a different ValueError
                 
+                # Key selection logic
+                found_key = None
+                for key_candidate in self.npz_key_priority:
+                    if key_candidate in data:
+                        found_key = key_candidate
+                        break
+                
+                if found_key:
+                    sequences = data[found_key]
+                elif data.files: # Fallback to the first key if no priority keys found
+                    logger.debug(f"Priority keys not found in {file_path.name}. Using first available key: {data.files[0]}")
+                    sequences = data[data.files[0]]
+                else:
+                    logger.error(f"No data found in {file_path.name}. Skipping file.")
+                    return np.array([]) # Return empty array to skip
+
+                if not isinstance(sequences, np.ndarray):
+                    logger.warning(f"Data for key '{found_key or data.files[0]}' in {file_path.name} is not a numpy array. Type: {type(sequences)}. Skipping file.")
+                    return np.array([])
+
                 # Add to cache
                 self._cache[file_key] = sequences
                 self._cache_order.append(file_key)
@@ -125,27 +151,68 @@ class TokenizedDataset(IterableDataset):
 class GCSDataManager:
     """Manages data synchronization with Google Cloud Storage"""
     
-    def __init__(self, bucket_name: str, remote_path: str, local_path: str):
+    def __init__(self, bucket_name: str, remote_path: str, local_path: str, use_gcs: bool = True, gcs_read_client_type: str = 'default'):
         self.bucket_name = bucket_name
         self.remote_path = remote_path.rstrip('/')
         self.local_path = Path(local_path)
-        self.local_path.mkdir(parents=True, exist_ok=True)
+        self.use_gcs = use_gcs
         
-        # Initialize GCS client
-        try:
-            self.client = storage.Client()
-            self.bucket = self.client.bucket(bucket_name)
-            logger.info(f"Connected to GCS bucket: {bucket_name}")
-        except Exception as e:
-            logger.error(f"Failed to connect to GCS: {e}")
-            raise
+        self.read_client = None
+        self.read_bucket = None
+        self.write_client = None
+        self.write_bucket = None
+        
+        if self.use_gcs:
+            self.local_path.mkdir(parents=True, exist_ok=True)
+            # Setup read client (can be anonymous or default)
+            try:
+                if gcs_read_client_type == 'anonymous':
+                    logger.info("Using anonymous GCS client for read operations.")
+                    self.read_client = storage.Client.create_anonymous_client()
+                else:
+                    logger.info("Using default GCS client for read operations (requires authentication if not public).")
+                    self.read_client = storage.Client()
+                
+                self.read_bucket = self.read_client.bucket(bucket_name)
+                logger.info(f"Read client connected to GCS bucket: {bucket_name} for {gcs_read_client_type} access.")
+            except Exception as e:
+                logger.error(f"Failed to initialize GCS read client (type: {gcs_read_client_type}): {e}")
+                logger.warning("GCS read operations will be disabled.")
+                # If read client fails, we might still want to allow writes if write client succeeds,
+                # but for now, let's consider read essential for sync.
+                # self.use_gcs = False # Or handle more granularly
+
+            # Setup write client (always attempts authenticated)
+            try:
+                logger.info("Attempting to initialize authenticated GCS client for write operations.")
+                self.write_client = storage.Client() # Standard client for writes
+                self.write_bucket = self.write_client.bucket(bucket_name)
+                logger.info(f"Write client connected to GCS bucket: {bucket_name} for authenticated access.")
+            except Exception as e:
+                logger.error(f"Failed to initialize GCS write client: {e}")
+                logger.warning("GCS write operations (e.g., checkpoint uploads) will be disabled. Ensure credentials are set up if uploads are needed.")
+                # self.write_client and self.write_bucket will remain None
+
+            # If neither client could be initialized, disable GCS fully for safety
+            if not self.read_client and not self.write_client:
+                logger.warning("Both GCS read and write clients failed to initialize. Disabling all GCS operations.")
+                self.use_gcs = False
+        else:
+            logger.info("GCS usage is disabled by configuration. Local data will be used.")
+            self.local_path.mkdir(parents=True, exist_ok=True)
     
     def sync_data_to_local(self, max_workers: int = 8) -> bool:
-        """Download data from GCS to local storage with parallel downloads"""
-        logger.info(f"Syncing data from gs://{self.bucket_name}/{self.remote_path} to {self.local_path}")
+        """Download data from GCS to local storage with parallel downloads using the read_client"""
+        if not self.use_gcs or not self.read_client or not self.read_bucket:
+            logger.info("Skipping GCS sync: GCS is not enabled or read client not initialized.")
+            # If GCS is meant to be used but read client failed, this should ideally be an error or handled based on strictness.
+            # For now, returning True means "no sync needed/attempted from this method's perspective if client is missing".
+            return True 
+            
+        logger.info(f"Syncing data from gs://{self.bucket_name}/{self.remote_path} to {self.local_path} using read client.")
         
-        # List remote files
-        blobs = list(self.bucket.list_blobs(prefix=self.remote_path))
+        # List remote files using read_bucket
+        blobs = list(self.read_bucket.list_blobs(prefix=self.remote_path))
         npz_blobs = [b for b in blobs if b.name.endswith('.npz')]
         
         logger.info(f"Found {len(npz_blobs)} .npz files to download")
@@ -187,7 +254,11 @@ class GCSDataManager:
         return success_count == len(npz_blobs)
     
     def upload_checkpoint(self, local_checkpoint_dir: str, remote_checkpoint_path: str):
-        """Upload checkpoint to GCS"""
+        """Upload checkpoint to GCS using the write_client"""
+        if not self.use_gcs or not self.write_client or not self.write_bucket:
+            logger.warning(f"Skipping checkpoint upload to GCS: GCS is not enabled or write client not initialized for bucket {self.bucket_name}.")
+            return False
+
         local_dir = Path(local_checkpoint_dir)
         
         if not local_dir.exists():
@@ -202,7 +273,7 @@ class GCSDataManager:
                     relative_path = file_path.relative_to(local_dir)
                     blob_name = f"{remote_checkpoint_path}/{relative_path}"
                     
-                    blob = self.bucket.blob(blob_name)
+                    blob = self.write_bucket.blob(blob_name)
                     blob.upload_from_filename(str(file_path))
                     logger.debug(f"Uploaded {relative_path}")
             
@@ -220,7 +291,8 @@ def create_dataloader(
     sequence_length: int = 2048,
     num_workers: int = 4,
     prefetch_factor: int = 2,
-    pin_memory: bool = True
+    pin_memory: bool = True,
+    npz_key_priority: Optional[List[str]] = None # Added
 ) -> DataLoader:
     """Create optimized DataLoader for training"""
     
@@ -228,7 +300,8 @@ def create_dataloader(
         data_dir=data_dir,
         sequence_length=sequence_length,
         cache_size=num_workers * 2,  # Cache more files with more workers
-        prefetch_factor=prefetch_factor
+        prefetch_factor=prefetch_factor,
+        npz_key_priority=npz_key_priority # Pass through
     )
     
     return DataLoader(
