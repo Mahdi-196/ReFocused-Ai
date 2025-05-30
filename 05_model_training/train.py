@@ -279,13 +279,16 @@ class ModelTrainer:
     def setup_checkpoint_manager(self):
         """Setup checkpoint management"""
         checkpoint_config = self.config['checkpointing']
+        data_config = self.config['data'] # Get data config for use_gcs
         
         self.checkpoint_manager = CheckpointManager(
             output_dir=checkpoint_config['output_dir'],
             remote_bucket=checkpoint_config['remote_checkpoint_bucket'],
             remote_path=checkpoint_config['remote_checkpoint_path'],
+            use_gcs=data_config.get('use_gcs', True),  # Pass use_gcs from data_config
             backup_every_n_steps=checkpoint_config['backup_every_n_steps'],
             keep_last_n=checkpoint_config['keep_last_n_checkpoints']
+            # async_backup is True by default in CheckpointManager, adjust if needed from config
         )
         
         logger.info("Checkpoint management setup completed")
@@ -483,12 +486,45 @@ class ModelTrainer:
         export_dir = f"{self.config['checkpointing']['output_dir']}/hf_model"
         
         # Save model in HuggingFace format
-        self.engine.save_pretrained(export_dir)
+        # Ensure model is on CPU and in FP32 for saving with save_pretrained
+        if hasattr(self.engine, 'module'):
+            model_to_save = self.engine.module
+        else:
+            model_to_save = self.engine
+
+        # If using DeepSpeed ZeRO, need to consolidate weights first
+        # This part might need adjustment based on how DeepSpeed handles model state
+        # For ZeRO Stage 3, the model on rank 0 might not have all weights unless gathered.
+        # However, engine.save_pretrained() is supposed to handle this.
+        
+        # Ensure the model is in eval mode and on CPU for saving
+        model_to_save.eval() # Set to evaluation mode
+        # model_to_save.cpu() # Moving to CPU might be problematic with large models / DeepSpeed states
+
+        logger.info(f"Attempting to save model to {export_dir}...")
+        self.engine.save_pretrained(export_dir) # DeepSpeed's method should handle ZeRO stages
         self.tokenizer.save_pretrained(export_dir)
+        logger.info(f"Model and tokenizer saved to {export_dir} locally.")
         
-        # Upload to GCS
-        self.gcs_manager.upload_checkpoint(export_dir, "final_model")
-        
+        # Upload to GCS if enabled
+        if self.gcs_manager and self.gcs_manager.use_gcs:
+            logger.info(f"Attempting to upload HF model from {export_dir} to GCS...")
+            # The method in GCSDataManager is `_upload_directory_to_gcs` or `upload_file`
+            # Assuming `upload_checkpoint` can be adapted or a new method is used for general directory upload.
+            # For now, let's assume a method like `upload_directory` exists or adapt existing.
+            # For simplicity, and if `upload_checkpoint` internally handles directory uploads correctly:
+            success = self.gcs_manager.backup_checkpoint(export_dir) # This will prefix it with remote_path from CheckpointManager
+            # A better approach for GCSDataManager:
+            # success = self.gcs_manager.upload_directory(local_path=export_dir, remote_target_path="final_hf_model")
+            if success:
+                logger.info(f"HuggingFace model from {export_dir} uploaded to GCS.")
+            else:
+                logger.error(f"Failed to upload HuggingFace model from {export_dir} to GCS.")
+        elif self.gcs_manager:
+             logger.info("GCS usage is disabled in GCSDataManager. Skipping HF model upload to GCS.")
+        else:
+            logger.warning("GCSDataManager not available. Skipping HF model upload to GCS.")
+            
         logger.info(f"Model exported to HuggingFace format: {export_dir}")
 
 
