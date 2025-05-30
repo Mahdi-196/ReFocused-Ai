@@ -26,6 +26,7 @@ class CheckpointManager:
         output_dir: str,
         remote_bucket: str,
         remote_path: str,
+        use_gcs: bool = True,
         backup_every_n_steps: int = 1000,
         keep_last_n: int = 5,
         async_backup: bool = True
@@ -33,6 +34,7 @@ class CheckpointManager:
         self.output_dir = Path(output_dir)
         self.remote_bucket = remote_bucket
         self.remote_path = remote_path.rstrip('/')
+        self.use_gcs = use_gcs
         self.backup_every_n_steps = backup_every_n_steps
         self.keep_last_n = keep_last_n
         self.async_backup = async_backup
@@ -40,14 +42,21 @@ class CheckpointManager:
         # Create output directory
         self.output_dir.mkdir(parents=True, exist_ok=True)
         
-        # Initialize GCS client
-        try:
-            self.gcs_client = storage.Client()
-            self.bucket = self.gcs_client.bucket(remote_bucket)
-            logger.info(f"Connected to GCS bucket: {remote_bucket}")
-        except Exception as e:
-            logger.error(f"Failed to connect to GCS: {e}")
-            raise
+        # Initialize GCS client only if use_gcs is True
+        self.gcs_client = None
+        self.bucket = None
+        if self.use_gcs:
+            try:
+                self.gcs_client = storage.Client()
+                self.bucket = self.gcs_client.bucket(remote_bucket)
+                logger.info(f"Connected to GCS bucket: {remote_bucket}")
+            except Exception as e:
+                logger.error(f"Failed to connect to GCS: {e}")
+                # Optionally, you might want to set use_gcs to False here or handle differently
+                # For now, let's re-raise if GCS is explicitly enabled but connection fails
+                raise
+        else:
+            logger.info("GCS usage is disabled for CheckpointManager.")
         
         # Background upload queue
         self.upload_queue = []
@@ -59,6 +68,8 @@ class CheckpointManager:
     
     def _start_upload_thread(self):
         """Start background upload thread"""
+        if not self.use_gcs:  # Only start if GCS is used
+            return
         self.upload_running = True
         self.upload_thread = threading.Thread(target=self._upload_worker, daemon=True)
         self.upload_thread.start()
@@ -66,6 +77,8 @@ class CheckpointManager:
     
     def _upload_worker(self):
         """Background worker for uploading checkpoints"""
+        if not self.use_gcs: # Worker should not run if GCS is not used
+            return
         while self.upload_running:
             if self.upload_queue:
                 checkpoint_dir = self.upload_queue.pop(0)
@@ -78,6 +91,10 @@ class CheckpointManager:
     
     def _upload_checkpoint_sync(self, local_checkpoint_dir: str) -> bool:
         """Synchronously upload checkpoint to GCS"""
+        if not self.use_gcs or not self.bucket: # Check if GCS is enabled and bucket is initialized
+            logger.warning("GCS is not configured. Skipping upload.")
+            return False
+            
         local_dir = Path(local_checkpoint_dir)
         
         if not local_dir.exists():
@@ -131,6 +148,10 @@ class CheckpointManager:
     
     def backup_checkpoint(self, checkpoint_dir: str) -> bool:
         """Backup checkpoint to GCS (async if enabled)"""
+        if not self.use_gcs: # If GCS is not used, don't attempt backup
+            logger.info("GCS usage is disabled. Skipping checkpoint backup to GCS.")
+            return False # Indicate backup was not performed to GCS
+
         if self.async_backup:
             # Add to upload queue
             self.upload_queue.append(checkpoint_dir)
@@ -142,6 +163,10 @@ class CheckpointManager:
     
     def download_checkpoint(self, checkpoint_name: str, local_dir: Optional[str] = None) -> str:
         """Download checkpoint from GCS"""
+        if not self.use_gcs or not self.bucket: # Check if GCS is enabled and bucket is initialized
+            logger.error("GCS is not configured. Cannot download checkpoint.")
+            raise ConnectionError("GCS client not initialized. Cannot download checkpoint.")
+
         if local_dir is None:
             local_dir = self.output_dir / checkpoint_name
         else:
@@ -200,6 +225,10 @@ class CheckpointManager:
     
     def list_checkpoints(self) -> List[Dict[str, Any]]:
         """List available checkpoints in GCS"""
+        if not self.use_gcs or not self.bucket: # Check if GCS is enabled and bucket is initialized
+            logger.info("GCS is not configured. Cannot list remote checkpoints.")
+            return []
+            
         try:
             # List all checkpoint directories
             blobs = list(self.bucket.list_blobs(prefix=self.remote_path, delimiter='/'))
@@ -336,7 +365,7 @@ class CheckpointManager:
     
     def stop(self):
         """Stop the checkpoint manager and cleanup"""
-        if self.upload_running:
+        if self.use_gcs and self.upload_running: # Only stop if it was running (i.e. GCS is used)
             self.upload_running = False
             
             # Wait for pending uploads to complete
@@ -377,8 +406,14 @@ if __name__ == "__main__":
         output_dir="/tmp/test_checkpoints",
         remote_bucket="test-bucket",
         remote_path="test_checkpoints",
+        use_gcs=False, # Example: testing with GCS disabled
         keep_last_n=3
     )
     
     # Test checkpoint info
-    print(f"Estimated 1B param checkpoint size: {estimate_checkpoint_size(1_000_000_000):.1f} GB") 
+    print(f"Estimated 1B param checkpoint size: {estimate_checkpoint_size(1_000_000_000):.1f} GB")
+    # Example of trying to use GCS features when disabled (should be handled gracefully or raise error)
+    if checkpoint_manager.use_gcs:
+        print("Listing remote checkpoints:", checkpoint_manager.list_checkpoints())
+    else:
+        print("Skipping remote checkpoint listing as GCS is disabled.") 
