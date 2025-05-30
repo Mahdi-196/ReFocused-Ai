@@ -1,61 +1,48 @@
-# Multi-GPU Training Configuration for 8x H100 SXM
-# Optimized for maximum efficiency and stability
+# H100 Multi-GPU Training Configuration
 
 # Model Configuration
 model:
+  type: gpt_neox
   config_path: "../models/gpt_750m/config.json"
-  vocab_size: 50000
+  tokenizer_path: "../models/tokenizer/tokenizer"
   
-# Training Parameters
+# Training Configuration
 training:
-  total_steps: 5000
-  max_epochs: 1
-  save_steps: 250
-  eval_steps: 500
-  logging_steps: 10
-  warmup_steps: 50
+  output_dir: "/home/ubuntu/training_data/checkpoints"
+  data_dir: "/home/ubuntu/training_data/shards"
+  log_dir: "/home/ubuntu/training_data/logs"
   
-  # Batch Size Configuration (Total: 4 * 8 * 8 = 256 across all GPUs)
-  per_device_train_batch_size: 4
-  gradient_accumulation_steps: 8
-  dataloader_num_workers: 4
-  dataloader_prefetch_factor: 2
+  # Training parameters
+  batch_size: 32
+  gradient_accumulation_steps: 1
+  total_steps: 100000
+  learning_rate: 5.0e-5
+  weight_decay: 0.01
+  warmup_steps: 2000
   
-  # Learning Rate
-  learning_rate: 3e-4
-  weight_decay: 0.1
-  lr_scheduler_type: "cosine"
-  
-  # Mixed Precision
-  fp16: false
-  bf16: true
+  # Optimization
+  fp16: true
+  bf16: false
   gradient_checkpointing: true
   
-# Data Configuration
+  # Checkpointing
+  save_steps: 500
+  eval_steps: 500
+  
+  # Logging
+  logging_steps: 10
+  log_level: "info"
+  wandb_project: "refocused-ai"
+  
+# DeepSpeed Configuration
+deepspeed:
+  config_path: "config/h100_deepspeed_multi.json"
+  
+# Data Management
 data:
-  # Google Cloud Storage paths
-  remote_data_bucket: "refocused-ai"
+  bucket_name: "refocused-ai"
   remote_data_path: "tokenized_data"
-  use_gcs: true
-  gcs_read_client_type: "anonymous"
-  
-  # Local staging paths
-  local_data_dir: "/home/ubuntu/training_data/shards"
-  
-  # Data loading
-  max_seq_length: 1024
-  preprocessing_num_workers: 8
-  npz_key_priority: ["input_ids", "arr_0", "sequences", "text"]
-  
-# Checkpointing & Storage
-checkpointing:
-  output_dir: "/home/ubuntu/training_data/checkpoints"
-  remote_checkpoint_bucket: "refocused-ai"
-  remote_checkpoint_path: "checkpoints"
-  
-  # Backup frequency
-  save_steps: 250
-  keep_last_n_checkpoints: 3
+  checkpoint_bucket_path: "Checkpoints"
   
 # Monitoring & Logging
 monitoring:
@@ -74,10 +61,6 @@ hardware:
   num_gpus: 8
   gpu_type: "H100_SXM"
   node_type: "single_node"
-  
-# DeepSpeed Configuration
-deepspeed:
-  config_path: "config/h100_deepspeed_multi.json"
   
 # Tokenizer
 tokenizer:

@@ -21,7 +21,8 @@ TENSORBOARD_PORT = 6006
 DATA_DOWNLOAD_BUCKET = "refocused-ai"
 NUM_FILES_TO_DOWNLOAD = 25
 
-PYTHON_EXECUTABLE = "python3.11" # Ensure this is the correct python version
+# Use the system Python - more reliable than hardcoding version
+PYTHON_EXECUTABLE = "python3"
 
 def run_command(command, working_dir=None, shell=True, check=True):
     print(f"\nExecuting: {' '.join(command) if isinstance(command, list) else command}")
@@ -50,30 +51,37 @@ def clone_repository():
     if os.path.exists(REPO_DIR):
         print(f"Repository already exists at {REPO_DIR}. Skipping clone.")
         # Optional: Add logic to pull latest changes if repo exists
-        # run_command(["git", "pull"], working_dir=REPO_DIR)
+        run_command(["git", "pull"], working_dir=REPO_DIR)
     else:
         run_command(["git", "clone", GIT_REPO_URL, REPO_DIR], working_dir=BASE_DIR)
 
 def install_python_dependencies():
-    print("\n--- Installing Python dependencies ---   	")
-    # Ensure pip is up-to-date for the correct python version
+    print("\n--- Installing Python dependencies ---")
+    # Ensure pip is up-to-date
     run_command(f"{PYTHON_EXECUTABLE} -m pip install --upgrade pip")
     
-    # Install PyTorch with CUDA 12.4 (adjust if your CUDA version differs)
-    run_command(f"{PYTHON_EXECUTABLE} -m pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu124")
+    # Install dependencies from requirements file
+    requirements_file = os.path.join(MODEL_TRAINING_DIR, "requirements_training.txt")
+    if os.path.exists(requirements_file):
+        print(f"Installing dependencies from {requirements_file}")
+        try:
+            run_command(f"{PYTHON_EXECUTABLE} -m pip install -r {requirements_file}")
+        except subprocess.CalledProcessError:
+            print("Failed to install all dependencies. Trying with --no-deps flag for problematic packages.")
+            # Install PyTorch with CUDA
+            run_command(f"{PYTHON_EXECUTABLE} -m pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121")
+            # Try again with no dependencies for core packages
+            run_command(f"{PYTHON_EXECUTABLE} -m pip install --no-deps -r {requirements_file}")
+            # Install critical packages individually
+            run_command(f"{PYTHON_EXECUTABLE} -m pip install transformers deepspeed google-cloud-storage requests")
+    else:
+        print("requirements_training.txt not found, installing packages individually.")
+        run_command(f"{PYTHON_EXECUTABLE} -m pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121")
+        run_command(f"{PYTHON_EXECUTABLE} -m pip install transformers accelerate deepspeed google-cloud-storage")
+        run_command(f"{PYTHON_EXECUTABLE} -m pip install datasets wandb tensorboard pyyaml requests")
     
-    # Install other dependencies from requirements_training.txt if it exists and is preferred
-    # requirements_file = os.path.join(MODEL_TRAINING_DIR, "requirements_training.txt")
-    # if os.path.exists(requirements_file):
-    #     print(f"Installing dependencies from {requirements_file}")
-    #     run_command(f"{PYTHON_EXECUTABLE} -m pip install -r {requirements_file}")
-    # else:
-    #     print("requirements_training.txt not found, installing packages individually.")
-    run_command(f"{PYTHON_EXECUTABLE} -m pip install --user transformers accelerate deepspeed")
-    run_command(f"{PYTHON_EXECUTABLE} -m pip install --user datasets wandb tensorboard pyyaml")
-    run_command(f"{PYTHON_EXECUTABLE} -m pip install --user google-cloud-storage requests numpy tokenizers")
     print("Verifying installations...")
-    run_command(f"{PYTHON_EXECUTABLE} -m pip list | grep -E 'transformers|accelerate|deepspeed|torch|datasets|wandb|tensorboard|PyYAML|google-cloud-storage|requests|numpy|tokenizers'")
+    run_command(f"{PYTHON_EXECUTABLE} -m pip list | grep -E 'transformers|accelerate|deepspeed|torch|google-cloud-storage|requests'")
 
 def create_persistent_directories():
     print("\n--- Creating persistent storage directories ---")
@@ -82,61 +90,75 @@ def create_persistent_directories():
         os.makedirs(dir_path, exist_ok=True)
         print(f"Ensured directory exists: {dir_path}")
 
+def create_model_directory():
+    print("\n--- Creating model directories and config files ---")
+    # Create model directory
+    model_dir = os.path.join(REPO_DIR, "models", "gpt_750m")
+    tokenizer_dir = os.path.join(REPO_DIR, "models", "tokenizer", "tokenizer")
+    os.makedirs(model_dir, exist_ok=True)
+    os.makedirs(tokenizer_dir, exist_ok=True)
+    
+    # Create model config file if it doesn't exist
+    config_path = os.path.join(model_dir, "config.json")
+    if not os.path.exists(config_path):
+        print(f"Creating model config file at {config_path}")
+        config_content = """{
+  "architectures": ["GPTNeoXForCausalLM"],
+  "attention_probs_dropout_prob": 0.1,
+  "bos_token_id": 50256,
+  "eos_token_id": 50256,
+  "hidden_act": "gelu",
+  "hidden_dropout_prob": 0.1,
+  "hidden_size": 1024,
+  "initializer_range": 0.02,
+  "intermediate_size": 4096,
+  "layer_norm_eps": 1e-05,
+  "max_position_embeddings": 2048,
+  "model_type": "gpt_neox",
+  "num_attention_heads": 16,
+  "num_hidden_layers": 24,
+  "rotary_emb_base": 10000,
+  "rotary_pct": 0.25,
+  "tie_word_embeddings": false,
+  "transformers_version": "4.28.1",
+  "use_cache": true,
+  "vocab_size": 50304
+}"""
+        with open(config_path, 'w') as f:
+            f.write(config_content)
+        print(f"Created model config file: {config_path}")
+    
+    # Create tokenizer files if they don't exist
+    if not os.path.exists(os.path.join(tokenizer_dir, "vocab.json")):
+        print("Creating tokenizer files using GPT2Tokenizer...")
+        try:
+            cmd = f"{PYTHON_EXECUTABLE} -c \"from transformers import GPT2Tokenizer; tokenizer = GPT2Tokenizer.from_pretrained('gpt2'); tokenizer.save_pretrained('{tokenizer_dir}')\""
+            run_command(cmd)
+            print(f"Created tokenizer files in {tokenizer_dir}")
+        except Exception as e:
+            print(f"Error creating tokenizer files: {e}")
+            print("You may need to create these manually")
+
 def download_training_data():
     print(f"\n--- Downloading training data (first {NUM_FILES_TO_DOWNLOAD} files) ---")
     os.makedirs(SHARDS_DIR, exist_ok=True)
-
-    bucket_url = f'https://storage.googleapis.com/storage/v1/b/{DATA_DOWNLOAD_BUCKET}/o'
-    print(f"Fetching file list from: {bucket_url}")
+    
     try:
-        response = requests.get(bucket_url, params={'prefix': 'tokenized_data/', 'maxResults': 1000}) # Fetch more to ensure we find enough NPZs
-        response.raise_for_status() 
-    except requests.exceptions.RequestException as e:
-        print(f"Error fetching file list from GCS: {e}")
-        return
-
-    if response.status_code == 200:
-        items = response.json().get('items', [])
-        # Ensure we only get files from the 'tokenized_data/' prefix and not other directories like 'tokenized_data_small/'
-        npz_files = [item for item in items if item['name'].endswith('.npz') and item['name'].startswith('tokenized_data/')]
+        # Try to list bucket contents first to check availability
+        run_command(f"{PYTHON_EXECUTABLE} {MODEL_TRAINING_DIR}/download_data.py --bucket {DATA_DOWNLOAD_BUCKET} --remote_path tokenized_data --list-only")
         
-        print(f"Found {len(npz_files)} .npz files in 'tokenized_data/' directory.")
-
-        downloaded_count = 0
-        for item in npz_files[:NUM_FILES_TO_DOWNLOAD]:
-            file_name = item['name'].split('/')[-1]
-            download_url = f'https://storage.googleapis.com/{DATA_DOWNLOAD_BUCKET}/{item["name"]}'
-            destination_path = os.path.join(SHARDS_DIR, file_name)
-
-            if os.path.exists(destination_path) and os.path.getsize(destination_path) == int(item['size']):
-                print(f"File {file_name} already exists and size matches. Skipping download.")
-                downloaded_count +=1
-                continue
-            
-            print(f"Downloading {file_name} from {download_url}...")
-            try:
-                file_response = requests.get(download_url, stream=True)
-                file_response.raise_for_status()
-                with open(destination_path, 'wb') as f:
-                    for chunk in file_response.iter_content(chunk_size=8192):
-                        f.write(chunk)
-                print(f"Successfully downloaded {file_name}")
-                downloaded_count += 1
-            except requests.exceptions.RequestException as e:
-                print(f"Error downloading {file_name}: {e}")
-            
-            if downloaded_count >= NUM_FILES_TO_DOWNLOAD:
-                break
-        
-        print(f"\n✅ Downloaded/verified {downloaded_count} files to {SHARDS_DIR}")
-    else:
-        print(f"Failed to list files from bucket. Status code: {response.status_code}, Response: {response.text}")
+        # Download training data
+        cmd = f"{PYTHON_EXECUTABLE} {MODEL_TRAINING_DIR}/download_data.py --bucket {DATA_DOWNLOAD_BUCKET} --remote_path tokenized_data --local_dir {SHARDS_DIR} --max_files {NUM_FILES_TO_DOWNLOAD} --workers 8"
+        run_command(cmd)
+    except Exception as e:
+        print(f"Error downloading training data: {e}")
+        print("Please check the bucket name and permissions")
 
 def start_tensorboard():
-    print("\n--- Starting TensorBoard ---   	")
+    print("\n--- Starting TensorBoard ---")
     # Check if TensorBoard is already running
     try:
-        subprocess.check_output(["pgrep", "-f", "tensorboard --logdir /home/ubuntu/training_data/logs"])
+        subprocess.check_output(["pgrep", "-f", f"tensorboard --logdir {TENSORBOARD_LOG_DIR}"])
         print(f"TensorBoard already running on port {TENSORBOARD_PORT}.")
         return
     except subprocess.CalledProcessError:
@@ -152,19 +174,19 @@ def start_tensorboard():
 def main():
     print("🚀 Starting H100 Environment Setup Script 🚀")
     
-    # 1. System Setup (Optional, assuming image has basics. User can uncomment if needed)
-    # install_system_packages() 
-    
-    # 2. Clone Repository
+    # 1. Clone Repository
     clone_repository()
     
-    # 3. Install Python Dependencies
+    # 2. Create Persistent Directories
+    create_persistent_directories()
+    
+    # 3. Create Model Directories and Config Files
+    create_model_directory()
+    
+    # 4. Install Python Dependencies
     # Make sure to `cd` into the repo if requirements.txt is to be used from there
     os.chdir(MODEL_TRAINING_DIR) # Important for relative paths in config if any
     install_python_dependencies()
-    
-    # 4. Create Persistent Directories
-    create_persistent_directories()
     
     # 5. Download Training Data
     download_training_data()
@@ -175,9 +197,9 @@ def main():
     print("\n🎉 Setup Complete! You should be ready to start training. 🎉")
     print("Next steps:")
     print(f"1. Navigate to the training directory: cd {MODEL_TRAINING_DIR}")
-    print("2. Verify your 'config/training_config.yaml' and 'config/model_config.json' are correct.")
-    print(f"3. Start training: {PYTHON_EXECUTABLE} train.py --config config/training_config.yaml")
-    print(f"4. Monitor on TensorBoard (check {BASE_DIR}/tensorboard.log for any issues).")
+    print("2. Run a quick test: bash h100_runner.sh test")
+    print("3. Start full training: bash h100_runner.sh full")
+    print(f"4. Monitor on TensorBoard at http://illegal-primrose-mastodon-6006.1.cricket.hyperbolic.xyz:30000")
 
 if __name__ == "__main__":
     main() 
