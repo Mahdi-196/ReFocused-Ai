@@ -46,7 +46,12 @@ def list_bucket_prefixes(bucket, delimiter='/'):
     prefixes = bucket.list_blobs(delimiter=delimiter)
     return [prefix.prefix for prefix in prefixes.prefixes]
 
-def download_data(bucket_name, remote_path, local_dir, max_workers=8, max_files=None, anonymous=True):
+def list_all_blobs(bucket, max_results=100):
+    """List all blobs in the bucket without any prefix filtering"""
+    all_blobs = list(bucket.list_blobs(max_results=max_results))
+    return all_blobs
+
+def download_data(bucket_name, remote_path, local_dir, max_workers=8, max_files=None, anonymous=True, list_only=False):
     """Download training data from GCS with parallel downloads"""
     try:
         # Create local directory
@@ -62,7 +67,44 @@ def download_data(bucket_name, remote_path, local_dir, max_workers=8, max_files=
         
         bucket = client.bucket(bucket_name)
         
-        # List blobs in the bucket with the given prefix
+        # First, check if bucket exists by listing all blobs
+        logger.info("Scanning entire bucket contents to identify data location...")
+        all_blobs = list_all_blobs(bucket)
+        
+        if not all_blobs:
+            logger.error(f"No files found in bucket: {bucket_name}. Bucket may be empty or not accessible.")
+            return False
+        
+        # Group files by directory to identify potential data locations
+        directories = {}
+        for blob in all_blobs:
+            parts = blob.name.split('/')
+            if len(parts) > 1:
+                directory = parts[0]
+                if directory not in directories:
+                    directories[directory] = []
+                directories[directory].append(blob.name)
+        
+        # Log all potential data directories
+        logger.info(f"Found {len(directories)} potential data directories:")
+        for directory, files in directories.items():
+            npz_count = sum(1 for f in files if f.endswith('.npz'))
+            logger.info(f"  - {directory}/: {len(files)} files ({npz_count} .npz files)")
+        
+        # Suggest a different remote path if no files found in specified path
+        if remote_path:
+            matching_dirs = [d for d in directories.keys() if remote_path in d or d in remote_path]
+            if matching_dirs:
+                logger.info(f"Suggested alternatives to '{remote_path}':")
+                for d in matching_dirs:
+                    logger.info(f"  - {d}/")
+        
+        # If list_only, stop here
+        if list_only:
+            logger.info("List-only mode. Skipping download.")
+            return True
+        
+        # Continue with normal flow - list blobs with the given prefix
         logger.info(f"Listing files in gs://{bucket_name}/{remote_path}")
         blobs = list(bucket.list_blobs(prefix=remote_path))
         
@@ -130,6 +172,8 @@ def main():
                       help="Use anonymous access (for public buckets)")
     parser.add_argument("--list-only", action="store_true",
                       help="Just list files without downloading")
+    parser.add_argument("--scan-bucket", action="store_true",
+                      help="Scan entire bucket to find where data is stored")
     
     args = parser.parse_args()
     
@@ -141,7 +185,8 @@ def main():
         local_dir=args.local_dir,
         max_workers=args.workers,
         max_files=args.max_files,
-        anonymous=args.anonymous
+        anonymous=args.anonymous,
+        list_only=args.list_only
     )
     
     if success:
