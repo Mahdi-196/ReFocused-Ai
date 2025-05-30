@@ -1,0 +1,90 @@
+# Multi-GPU Training Configuration for 8x H100 SXM
+# Optimized for maximum efficiency and stability
+
+# Model Configuration
+model:
+  config_path: "../models/gpt_750m/config.json"
+  vocab_size: 50000
+  
+# Training Parameters
+training:
+  total_steps: 5000
+  max_epochs: 1
+  save_steps: 250
+  eval_steps: 500
+  logging_steps: 10
+  warmup_steps: 50
+  
+  # Batch Size Configuration (Total: 4 * 8 * 8 = 256 across all GPUs)
+  per_device_train_batch_size: 4
+  gradient_accumulation_steps: 8
+  dataloader_num_workers: 4
+  dataloader_prefetch_factor: 2
+  
+  # Learning Rate
+  learning_rate: 3e-4
+  weight_decay: 0.1
+  lr_scheduler_type: "cosine"
+  
+  # Mixed Precision
+  fp16: false
+  bf16: true
+  gradient_checkpointing: true
+  
+# Data Configuration
+data:
+  # Google Cloud Storage paths
+  remote_data_bucket: "refocused-ai"
+  remote_data_path: "tokenized_data"
+  use_gcs: true
+  gcs_read_client_type: "anonymous"
+  
+  # Local staging paths
+  local_data_dir: "/home/ubuntu/training_data/shards"
+  
+  # Data loading
+  max_seq_length: 1024
+  preprocessing_num_workers: 8
+  npz_key_priority: ["input_ids", "arr_0", "sequences", "text"]
+  
+# Checkpointing & Storage
+checkpointing:
+  output_dir: "/home/ubuntu/training_data/checkpoints"
+  remote_checkpoint_bucket: "refocused-ai"
+  remote_checkpoint_path: "checkpoints"
+  
+  # Backup frequency
+  save_steps: 250
+  keep_last_n_checkpoints: 3
+  
+# Monitoring & Logging
+monitoring:
+  wandb_project: "refocused-ai-training"
+  wandb_entity: null
+  report_to: ["wandb", "tensorboard"]
+  logging_dir: "/home/ubuntu/training_data/logs"
+  
+  # Performance monitoring
+  monitor_gpu_memory: false
+  monitor_system_metrics: false
+  log_gpu_metrics_interval: 60
+  
+# Hardware Configuration
+hardware:
+  num_gpus: 8
+  gpu_type: "H100_SXM"
+  node_type: "single_node"
+  
+# DeepSpeed Configuration
+deepspeed:
+  config_path: "config/h100_deepspeed_multi.json"
+  
+# Tokenizer
+tokenizer:
+  path: "../models/tokenizer/tokenizer"
+  
+# Environment
+environment:
+  seed: 42
+  cuda_visible_devices: "0,1,2,3,4,5,6,7"
+  rdma_fork_safe: true 
