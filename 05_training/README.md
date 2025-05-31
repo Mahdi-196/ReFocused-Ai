@@ -189,12 +189,18 @@ To ensure reproducibility and consistency, we now use exact versions for all dep
 - TensorBoard: 2.15.0
 - Flash Attention: 2.3.0
 - Accelerate: 0.25.0
+- NumPy: 1.24.0 (must be 1.x for wandb/tensorboard compatibility)
+- Packaging: 23.2 (added for dependency resolution)
 
 The `setup_environment.sh` script checks for Python version consistency and installs all dependencies with their exact versions.
 
 ### Version Consistency
 
 The training scripts now include version checks to ensure all dependencies are installed with the correct versions. This prevents issues that can arise from mismatched library versions.
+
+### NumPy Compatibility Note
+
+Both wandb and TensorBoard require NumPy 1.x as they use attributes like `np.float_` and `np.string_` that have been removed in NumPy 2.x. The setup script enforces NumPy 1.24.0 to ensure compatibility.
 
 ## Version Verification
 

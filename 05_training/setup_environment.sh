@@ -39,6 +39,14 @@ pip install --upgrade pip==23.1.2
 echo "Installing PyTorch with CUDA 12.1 support..."
 pip install torch==2.1.0 torchvision==0.16.0 torchaudio==2.1.0 --index-url https://download.pytorch.org/whl/cu121
 
+# Install packaging library first (dependency resolution)
+echo "Installing packaging library..."
+pip install packaging==23.2
+
+# Install NumPy 1.x explicitly first (for wandb/tensorboard compatibility)
+echo "Installing NumPy 1.x (required for wandb/tensorboard)..."
+pip install numpy==1.24.0
+
 # Install core dependencies with exact versions
 echo "Installing core dependencies..."
 pip install -r requirements.txt
@@ -50,6 +58,10 @@ pip show flash-attn
 # Install additional monitoring tools - with fixed versions
 echo "Installing monitoring tools..."
 pip install wandb==0.16.0 tensorboard==2.15.0 gpustat==1.1.1
+
+# Verify NumPy version is still 1.x
+echo "Verifying NumPy version (should be 1.x)..."
+python -c "import numpy as np; print(f'NumPy version: {np.__version__}'); assert np.__version__.startswith('1.'), 'NumPy 2.x detected, which is incompatible with wandb/tensorboard'"
 
 # Setup Google Cloud authentication
 echo "Setting up Google Cloud authentication..."

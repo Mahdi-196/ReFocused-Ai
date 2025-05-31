@@ -12,7 +12,7 @@ google-cloud-storage==2.10.0
 google-auth==2.23.0
 
 # Data processing
-numpy==1.24.0
+numpy==1.24.0  # Keep 1.x version for wandb/tensorboard compatibility
 pandas==2.1.0
 
 # Monitoring and logging
@@ -30,6 +30,7 @@ pyyaml==6.0
 python-dotenv==1.0.0
 rich==13.7.0  # For pretty console output
 psutil==5.9.0  # For system monitoring
+packaging==23.2  # Added for dependency resolution
 
 # Development tools
 black==23.0.0
