@@ -9,7 +9,13 @@ import time
 import torch
 import torch.distributed as dist
 from torch.nn.parallel import DistributedDataParallel as DDP
-from torch.utils.tensorboard import SummaryWriter
+# Update TensorBoard import with version check to ensure compatibility
+try:
+    from torch.utils.tensorboard import SummaryWriter
+except ImportError:
+    from tensorboard.compat.tensorflow_stub.io.gfile import get_filesystem
+    from tensorboard.backend.event_processing import event_accumulator
+    from tensorboard import SummaryWriter
 import deepspeed
 from transformers import AutoTokenizer
 import wandb
@@ -24,6 +30,22 @@ from model_config import ModelConfig, TrainingConfig, get_test_config, get_produ
 from data_loader import create_dataloaders, estimate_dataset_size
 from optimizer import create_optimizer_and_scheduler
 
+# Version check for key dependencies
+import pkg_resources
+required_packages = {
+    "torch": "2.1.0",
+    "transformers": "4.35.0",
+    "tensorboard": "2.15.0",
+    "deepspeed": "0.12.0"
+}
+
+for package, version in required_packages.items():
+    try:
+        installed_version = pkg_resources.get_distribution(package).version
+        if installed_version != version:
+            logging.warning(f"Warning: {package} version mismatch. Required: {version}, Installed: {installed_version}")
+    except pkg_resources.DistributionNotFound:
+        logging.error(f"Error: {package} is not installed")
 
 # Setup logging
 logging.basicConfig(

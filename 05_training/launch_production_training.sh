@@ -8,6 +8,22 @@ echo "Training on full dataset with 8x H100 GPUs"
 source venv/bin/activate
 source .env
 
+# Verify Python version matches setup
+echo "Verifying Python version..."
+current_python_version=$(python --version)
+if [[ -n "$PYTHON_VERSION" && "$current_python_version" != "$PYTHON_VERSION" ]]; then
+    echo "WARNING: Current Python version ($current_python_version) doesn't match setup version ($PYTHON_VERSION)"
+    echo "Continue anyway? (y/n)"
+    read -r response
+    if [ "$response" != "y" ]; then
+        exit 1
+    fi
+fi
+
+# Check TensorBoard version
+echo "Verifying TensorBoard version..."
+pip show tensorboard
+
 # Check GPU availability
 echo "Checking GPU availability..."
 nvidia-smi --query-gpu=index,name,memory.total --format=csv
