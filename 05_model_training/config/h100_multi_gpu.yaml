@@ -41,7 +41,7 @@ deepspeed:
 # Data Management
 data:
   bucket_name: "refocused-ai"
-  remote_data_path: "tokenized_data"
+  remote_data_path: ""
   checkpoint_bucket_path: "Checkpoints"
   
 # Monitoring & Logging

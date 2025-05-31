@@ -12,7 +12,7 @@ set -e
 
 # Configuration
 BUCKET_NAME="refocused-ai"
-DATA_REMOTE_PATH="tokenized_data"
+DATA_REMOTE_PATH=""
 DATA_LOCAL_DIR="/home/ubuntu/training_data/shards"
 CHECKPOINT_DIR="/home/ubuntu/training_data/checkpoints"
 MAX_FILES=25 # For testing only
@@ -39,12 +39,22 @@ download_data() {
     echo "Downloading training data..."
     if [ "$1" == "test" ]; then
         echo "Test mode: Downloading only $MAX_FILES files"
-        python3 download_data.py --bucket $BUCKET_NAME --remote_path $DATA_REMOTE_PATH \
-            --local_dir $DATA_LOCAL_DIR --max_files $MAX_FILES --workers 8
+        if [ -z "$DATA_REMOTE_PATH" ]; then
+            python3 download_data.py --bucket $BUCKET_NAME \
+                --local_dir $DATA_LOCAL_DIR --max_files $MAX_FILES --workers 8
+        else
+            python3 download_data.py --bucket $BUCKET_NAME --remote_path "$DATA_REMOTE_PATH" \
+                --local_dir $DATA_LOCAL_DIR --max_files $MAX_FILES --workers 8
+        fi
     else
         echo "Full mode: Downloading all available files"
-        python3 download_data.py --bucket $BUCKET_NAME --remote_path $DATA_REMOTE_PATH \
-            --local_dir $DATA_LOCAL_DIR --workers 16
+        if [ -z "$DATA_REMOTE_PATH" ]; then
+            python3 download_data.py --bucket $BUCKET_NAME \
+                --local_dir $DATA_LOCAL_DIR --workers 16
+        else
+            python3 download_data.py --bucket $BUCKET_NAME --remote_path "$DATA_REMOTE_PATH" \
+                --local_dir $DATA_LOCAL_DIR --workers 16
+        fi
     fi
 }
 
