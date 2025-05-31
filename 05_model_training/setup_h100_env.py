@@ -20,7 +20,7 @@ TENSORBOARD_LOG_DIR = LOGS_DIR
 TENSORBOARD_PORT = 6006
 
 DATA_DOWNLOAD_BUCKET = "refocused-ai"
-DATA_REMOTE_PATH = ""  # Empty for root of bucket
+DATA_REMOTE_PATH = "refocused-ai" 
 NUM_FILES_TO_DOWNLOAD = 25
 
 # Use the system Python - more reliable than hardcoding version
