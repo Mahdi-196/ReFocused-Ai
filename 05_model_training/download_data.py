@@ -192,7 +192,7 @@ def main():
     parser = argparse.ArgumentParser(description="Download training data from GCS")
     parser.add_argument("--bucket", type=str, default="refocused-ai",
                       help="GCS bucket name")
-    parser.add_argument("--remote_path", type=str, default="tokenized_data",
+    parser.add_argument("--remote_path", type=str, default="",
                       help="Remote path in GCS bucket")
     parser.add_argument("--local_dir", type=str, default="/home/ubuntu/training_data/shards",
                       help="Local directory to save data")

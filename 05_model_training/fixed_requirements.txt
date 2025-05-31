@@ -26,7 +26,7 @@ nvidia-ml-py>=12.535.77
 # Performance & Utilities
 psutil>=5.9.0
 pynvml>=11.5.0
-mpi4py>=3.1.0
+# mpi4py>=3.1.0  # Installing separately with OpenMPI
 pyyaml>=6.0.0
 
 # Data Processing
