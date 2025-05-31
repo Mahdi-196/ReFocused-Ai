@@ -19,7 +19,7 @@ rm -rf $DATA_DIR
 mkdir -p $DATA_DIR
 
 # 3. Download first 25 tokenized files from GCS
-echo "Downloading first 25 tokenized files from gs://refocused-ai/tokenized_data/..."
+echo "Downloading first 25 tokenized files from gs://refocused-ai/..."
 
 # First, check if gsutil is available
 if ! command -v gsutil &> /dev/null; then
@@ -29,7 +29,7 @@ fi
 
 # Download files with error handling
 echo "Listing available files..."
-gsutil ls "gs://refocused-ai/tokenized_data/shard_*.npz" > /tmp/available_files.txt 2>/dev/null || {
+gsutil ls "gs://refocused-ai/shard_*.npz" > /tmp/available_files.txt 2>/dev/null || {
     echo "ERROR: Failed to list files from GCS. Check your credentials and bucket access."
     exit 1
 }
