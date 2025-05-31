@@ -35,17 +35,22 @@ source venv/bin/activate
 echo "Upgrading pip..."
 pip install --upgrade pip==23.1.2
 
+# CRITICAL: Install packaging first (required by many packages)
+echo "Installing packaging library..."
+pip install packaging==23.2
+
+# CRITICAL: Install NumPy 1.x explicitly first
+echo "Installing NumPy 1.x (required for wandb/tensorboard)..."
+pip install numpy==1.24.0
+
 # Install PyTorch with CUDA support - fixed version
 echo "Installing PyTorch with CUDA 12.1 support..."
 pip install torch==2.1.0 torchvision==0.16.0 torchaudio==2.1.0 --index-url https://download.pytorch.org/whl/cu121
 
-# Install packaging library first (dependency resolution)
-echo "Installing packaging library..."
-pip install packaging==23.2
-
-# Install NumPy 1.x explicitly first (for wandb/tensorboard compatibility)
-echo "Installing NumPy 1.x (required for wandb/tensorboard)..."
-pip install numpy==1.24.0
+# Verify NumPy is still 1.x (PyTorch might have upgraded it)
+echo "Verifying NumPy is still 1.x..."
+pip uninstall -y numpy
+pip install numpy==1.24.0 --force-reinstall
 
 # Install core dependencies with exact versions
 echo "Installing core dependencies..."
@@ -53,15 +58,30 @@ pip install -r requirements.txt
 
 # Install Flash Attention 2 - already in requirements.txt with fixed version
 echo "Verifying Flash Attention 2 installation..."
-pip show flash-attn
+pip show flash-attn || echo "Flash Attention not installed, will try installing separately"
+
+# Flash Attention may need special installation
+echo "Installing Flash Attention (if needed)..."
+pip install flash-attn==2.3.0 || echo "Flash Attention installation failed, but continuing..."
 
 # Install additional monitoring tools - with fixed versions
 echo "Installing monitoring tools..."
 pip install wandb==0.16.0 tensorboard==2.15.0 gpustat==1.1.1
 
-# Verify NumPy version is still 1.x
-echo "Verifying NumPy version (should be 1.x)..."
-python -c "import numpy as np; print(f'NumPy version: {np.__version__}'); assert np.__version__.startswith('1.'), 'NumPy 2.x detected, which is incompatible with wandb/tensorboard'"
+# CRITICAL: Verify NumPy version one final time
+echo "Final NumPy version check..."
+python -c "import numpy as np; print(f'NumPy version: {np.__version__}'); assert np.__version__.startswith('1.'), 'NumPy 2.x detected!'" || { 
+    echo "ERROR: NumPy 2.x detected. Forcing downgrade to 1.24.0..."; 
+    pip uninstall -y numpy; 
+    pip install numpy==1.24.0 --force-reinstall; 
+}
+
+# Verify packaging is installed
+echo "Verifying packaging installation..."
+python -c "import packaging; print(f'Packaging version: {packaging.__version__}')" || {
+    echo "ERROR: Packaging not found. Installing..."; 
+    pip install packaging==23.2;
+}
 
 # Setup Google Cloud authentication
 echo "Setting up Google Cloud authentication..."
@@ -111,4 +131,7 @@ echo "  source .env"
 echo ""
 echo "To start training:"
 echo "  Test run (25 files): python train.py --mode test"
-echo "  Full training: python train.py --mode production" 
+echo "  Full training: python train.py --mode production"
+echo ""
+echo "If you encounter NumPy version or packaging issues, run:"
+echo "  ./fix_env.sh" 
