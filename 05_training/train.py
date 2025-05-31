@@ -1,380 +1,740 @@
+#!/usr/bin/env python3
 """
-Main training script for 1B parameter model with efficiency optimizations
+ReFocused-AI GPT Training Script
+Trains a ~1.2B parameter GPT model from scratch using DeepSpeed
 """
 
-import os
 import sys
+import os
 import json
+import argparse
+import shutil
 import time
-import torch
-import torch.distributed as dist
-from torch.nn.parallel import DistributedDataParallel as DDP
-# Update TensorBoard import with version check to ensure compatibility
+from pathlib import Path
+from datetime import datetime
+from typing import Dict, List, Optional, Tuple
+import logging
+
+# ========== Version & Dependency Checks ==========
+print("Checking dependencies...")
+
+# 1. NumPy must be 1.x
+try:
+    import numpy as np
+except ImportError:
+    sys.exit("ERROR: numpy is not installed. Run `pip install numpy==1.24.0`")
+if not np.__version__.startswith("1."):
+    sys.exit(f"ERROR: Incompatible NumPy {np.__version__}. Use 1.24.0.")
+
+# 2. Packaging
+try:
+    import packaging
+except ImportError:
+    sys.exit("ERROR: packaging missing. Run `pip install packaging==23.2`")
+
+# 3. PyTorch version check
+try:
+    import torch
+    import torch.nn as nn
+    import torch.nn.functional as F
+    from torch.utils.data import DataLoader, Dataset, DistributedSampler
+except ImportError:
+    sys.exit("ERROR: PyTorch not found. Install torch==2.1.0+cu118 first.")
+if not torch.__version__.startswith("2.1.0"):
+    sys.exit(f"ERROR: PyTorch {torch.__version__} unsupported. Use 2.1.0.")
+
+# 4. Flash-Attention (optional)
+FLASH_ATTN_AVAILABLE = False
+try:
+    import flash_attn
+    from flash_attn import flash_attn_func
+    FLASH_ATTN_AVAILABLE = True
+    print("✓ Flash Attention available")
+except ImportError:
+    print("WARNING: flash-attn not found. Using standard attention.")
+
+# 5. TensorBoard & W&B
 try:
     from torch.utils.tensorboard import SummaryWriter
 except ImportError:
-    from tensorboard.compat.tensorflow_stub.io.gfile import get_filesystem
-    from tensorboard.backend.event_processing import event_accumulator
-    from tensorboard import SummaryWriter
-import deepspeed
-from transformers import AutoTokenizer
-import wandb
-from google.cloud import storage
-from pathlib import Path
-import logging
-from datetime import datetime
-import shutil
+    sys.exit("ERROR: TensorBoard import failed. Install tensorboard==2.15.0")
 
-# Check NumPy version - must be 1.x for wandb/tensorboard compatibility
-import numpy as np
-if not np.__version__.startswith('1.'):
-    print(f"WARNING: NumPy version {np.__version__} detected. wandb and tensorboard require NumPy 1.x.")
-    print("Please install numpy==1.24.0 for compatibility.")
-    sys.exit(1)
+WANDB_AVAILABLE = False
+try:
+    import wandb
+    WANDB_AVAILABLE = True
+except ImportError:
+    print("WARNING: wandb not installed. Proceeding without W&B logs.")
 
-from model import GPTModel
-from model_config import ModelConfig, TrainingConfig, get_test_config, get_production_config
-from data_loader import create_dataloaders, estimate_dataset_size
-from optimizer import create_optimizer_and_scheduler
+# 6. Transformers (for tokenizer only)
+try:
+    from transformers import AutoTokenizer
+except ImportError:
+    sys.exit("ERROR: transformers not installed. Run `pip install transformers==4.35.2`")
 
-# Version check for key dependencies
-import pkg_resources
-required_packages = {
-    "torch": "2.1.0",
-    "transformers": "4.35.0",
-    "tensorboard": "2.15.0",
-    "deepspeed": "0.12.0",
-    "numpy": "1.24.0",
-    "packaging": "23.2"
+# 7. DeepSpeed
+try:
+    import deepspeed
+    from deepspeed import comm as dist
+except ImportError:
+    sys.exit("ERROR: DeepSpeed not installed. Run setup_env.sh first.")
+
+# 8. Google Cloud Storage
+try:
+    from google.cloud import storage
+    from google.api_core import retry
+except ImportError:
+    sys.exit("ERROR: google-cloud-storage not installed.")
+
+# 9. Other utilities
+try:
+    from tqdm import tqdm
+except ImportError:
+    sys.exit("ERROR: tqdm not installed.")
+
+print("✓ All dependencies verified\n")
+
+# ========== Configuration ==========
+MODEL_CONFIGS = {
+    "125M": {
+        "n_layers": 12,
+        "n_heads": 12,
+        "d_model": 768,
+        "d_ff": 3072,
+        "vocab_size": 50257,
+        "max_seq_len": 2048,
+        "dropout": 0.1,
+    },
+    "350M": {
+        "n_layers": 24,
+        "n_heads": 16,
+        "d_model": 1024,
+        "d_ff": 4096,
+        "vocab_size": 50257,
+        "max_seq_len": 2048,
+        "dropout": 0.1,
+    },
+    "760M": {
+        "n_layers": 24,
+        "n_heads": 16,
+        "d_model": 1536,
+        "d_ff": 6144,
+        "vocab_size": 50257,
+        "max_seq_len": 2048,
+        "dropout": 0.1,
+    },
+    "1.2B": {
+        "n_layers": 24,
+        "n_heads": 16,
+        "d_model": 2048,
+        "d_ff": 8192,
+        "vocab_size": 50257,
+        "max_seq_len": 2048,
+        "dropout": 0.1,
+    },
 }
 
-for package, version in required_packages.items():
-    try:
-        installed_version = pkg_resources.get_distribution(package).version
-        if installed_version != version:
-            logging.warning(f"Warning: {package} version mismatch. Required: {version}, Installed: {installed_version}")
-    except pkg_resources.DistributionNotFound:
-        logging.error(f"Error: {package} is not installed")
-
-# Setup logging
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-)
-logger = logging.getLogger(__name__)
-
-
-class Trainer:
-    """Main trainer class with all optimizations"""
+# ========== Model Definition ==========
+class MultiHeadAttention(nn.Module):
+    """Multi-Head Attention with optional Flash Attention"""
     
-    def __init__(self, model_config: ModelConfig, training_config: TrainingConfig):
-        self.model_config = model_config
-        self.training_config = training_config
+    def __init__(self, d_model: int, n_heads: int, dropout: float = 0.1):
+        super().__init__()
+        assert d_model % n_heads == 0
         
-        # Setup device and distributed training
-        self.setup_distributed()
+        self.d_model = d_model
+        self.n_heads = n_heads
+        self.d_k = d_model // n_heads
         
-        # Initialize model
-        self.model = GPTModel(model_config)
+        self.w_q = nn.Linear(d_model, d_model)
+        self.w_k = nn.Linear(d_model, d_model)
+        self.w_v = nn.Linear(d_model, d_model)
+        self.w_o = nn.Linear(d_model, d_model)
         
-        # Load tokenizer
-        self.tokenizer = AutoTokenizer.from_pretrained("../tokenizer_1B")
+        self.dropout = nn.Dropout(dropout)
+        self.scale = self.d_k ** -0.5
         
-        # Setup training components
-        self.setup_training()
+    def forward(self, x: torch.Tensor, mask: Optional[torch.Tensor] = None) -> torch.Tensor:
+        batch_size, seq_len, _ = x.shape
         
-        # Initialize tracking
+        # Linear projections
+        q = self.w_q(x).view(batch_size, seq_len, self.n_heads, self.d_k)
+        k = self.w_k(x).view(batch_size, seq_len, self.n_heads, self.d_k)
+        v = self.w_v(x).view(batch_size, seq_len, self.n_heads, self.d_k)
+        
+        if FLASH_ATTN_AVAILABLE and mask is None:
+            # Use Flash Attention if available
+            q = q.transpose(1, 2)  # [B, H, S, D]
+            k = k.transpose(1, 2)
+            v = v.transpose(1, 2)
+            attn_output = flash_attn_func(q, k, v, dropout_p=self.dropout.p if self.training else 0.0)
+            attn_output = attn_output.transpose(1, 2).contiguous()
+        else:
+            # Standard attention
+            q = q.transpose(1, 2)  # [B, H, S, D]
+            k = k.transpose(1, 2)
+            v = v.transpose(1, 2)
+            
+            scores = torch.matmul(q, k.transpose(-2, -1)) * self.scale
+            
+            if mask is not None:
+                scores = scores.masked_fill(mask == 0, -1e9)
+            
+            attn_weights = F.softmax(scores, dim=-1)
+            attn_weights = self.dropout(attn_weights)
+            
+            attn_output = torch.matmul(attn_weights, v)
+            attn_output = attn_output.transpose(1, 2).contiguous()
+        
+        # Reshape and project
+        attn_output = attn_output.view(batch_size, seq_len, self.d_model)
+        output = self.w_o(attn_output)
+        
+        return output
+
+
+class TransformerBlock(nn.Module):
+    """Transformer block with pre-normalization"""
+    
+    def __init__(self, d_model: int, n_heads: int, d_ff: int, dropout: float = 0.1):
+        super().__init__()
+        self.ln1 = nn.LayerNorm(d_model)
+        self.attn = MultiHeadAttention(d_model, n_heads, dropout)
+        self.ln2 = nn.LayerNorm(d_model)
+        self.ffn = nn.Sequential(
+            nn.Linear(d_model, d_ff),
+            nn.GELU(),
+            nn.Linear(d_ff, d_model),
+            nn.Dropout(dropout)
+        )
+        self.dropout = nn.Dropout(dropout)
+        
+    def forward(self, x: torch.Tensor, mask: Optional[torch.Tensor] = None) -> torch.Tensor:
+        # Self-attention with residual
+        attn_out = self.attn(self.ln1(x), mask)
+        x = x + self.dropout(attn_out)
+        
+        # FFN with residual
+        ffn_out = self.ffn(self.ln2(x))
+        x = x + ffn_out
+        
+        return x
+
+
+class GPTModel(nn.Module):
+    """GPT Model from scratch"""
+    
+    def __init__(self, config: dict):
+        super().__init__()
+        self.config = config
+        
+        # Token and position embeddings
+        self.token_embedding = nn.Embedding(config["vocab_size"], config["d_model"])
+        self.position_embedding = nn.Embedding(config["max_seq_len"], config["d_model"])
+        self.dropout = nn.Dropout(config["dropout"])
+        
+        # Transformer blocks
+        self.blocks = nn.ModuleList([
+            TransformerBlock(
+                config["d_model"],
+                config["n_heads"],
+                config["d_ff"],
+                config["dropout"]
+            )
+            for _ in range(config["n_layers"])
+        ])
+        
+        # Final layer norm and output projection
+        self.ln_f = nn.LayerNorm(config["d_model"])
+        self.lm_head = nn.Linear(config["d_model"], config["vocab_size"], bias=False)
+        
+        # Weight tying
+        self.lm_head.weight = self.token_embedding.weight
+        
+        # Initialize weights
+        self.apply(self._init_weights)
+        
+    def _init_weights(self, module):
+        if isinstance(module, (nn.Linear, nn.Embedding)):
+            module.weight.data.normal_(mean=0.0, std=0.02)
+            if isinstance(module, nn.Linear) and module.bias is not None:
+                module.bias.data.zero_()
+        elif isinstance(module, nn.LayerNorm):
+            module.bias.data.zero_()
+            module.weight.data.fill_(1.0)
+    
+    def forward(self, input_ids: torch.Tensor, labels: Optional[torch.Tensor] = None) -> dict:
+        batch_size, seq_len = input_ids.shape
+        device = input_ids.device
+        
+        # Create position ids
+        position_ids = torch.arange(seq_len, dtype=torch.long, device=device)
+        position_ids = position_ids.unsqueeze(0).expand(batch_size, -1)
+        
+        # Embeddings
+        token_embeds = self.token_embedding(input_ids)
+        position_embeds = self.position_embedding(position_ids)
+        hidden_states = self.dropout(token_embeds + position_embeds)
+        
+        # Create causal mask
+        mask = torch.tril(torch.ones(seq_len, seq_len, device=device)).unsqueeze(0).unsqueeze(0)
+        
+        # Pass through transformer blocks
+        for block in self.blocks:
+            if deepspeed.checkpointing.is_configured():
+                hidden_states = deepspeed.checkpointing.checkpoint(block, hidden_states, mask)
+            else:
+                hidden_states = block(hidden_states, mask)
+        
+        # Final layer norm
+        hidden_states = self.ln_f(hidden_states)
+        
+        # Language modeling head
+        logits = self.lm_head(hidden_states)
+        
+        loss = None
+        if labels is not None:
+            # Shift so that tokens < n predict n
+            shift_logits = logits[..., :-1, :].contiguous()
+            shift_labels = labels[..., 1:].contiguous()
+            # Flatten the tokens
+            loss = F.cross_entropy(
+                shift_logits.view(-1, shift_logits.size(-1)),
+                shift_labels.view(-1),
+                ignore_index=-100
+            )
+        
+        return {
+            "loss": loss,
+            "logits": logits,
+        }
+    
+    def get_num_params(self) -> int:
+        """Get number of parameters"""
+        return sum(p.numel() for p in self.parameters())
+
+
+# ========== Dataset ==========
+class TokenDataset(Dataset):
+    """Dataset for loading tokenized .npz files"""
+    
+    def __init__(self, file_paths: List[str], max_seq_len: int = 2048):
+        self.file_paths = sorted(file_paths)
+        self.max_seq_len = max_seq_len
+        self.current_file_idx = 0
+        self.current_data = None
+        self.current_position = 0
+        
+        # Load first file
+        if self.file_paths:
+            self._load_file(0)
+    
+    def _load_file(self, idx: int):
+        """Load a specific .npz file"""
+        if idx < len(self.file_paths):
+            data = np.load(self.file_paths[idx])
+            self.current_data = data['tokens']
+            self.current_position = 0
+            self.current_file_idx = idx
+    
+    def __len__(self):
+        # Estimate based on file size
+        return len(self.file_paths) * 10000  # Rough estimate
+    
+    def __getitem__(self, idx):
+        # Simple sequential reading
+        if self.current_data is None:
+            return torch.zeros(self.max_seq_len, dtype=torch.long)
+        
+        # Check if we need to move to next file
+        if self.current_position + self.max_seq_len + 1 >= len(self.current_data):
+            self.current_file_idx = (self.current_file_idx + 1) % len(self.file_paths)
+            self._load_file(self.current_file_idx)
+        
+        # Extract sequence
+        start = self.current_position
+        end = start + self.max_seq_len + 1
+        
+        if end <= len(self.current_data):
+            tokens = self.current_data[start:end]
+        else:
+            # Pad if necessary
+            tokens = np.concatenate([
+                self.current_data[start:],
+                np.zeros(end - len(self.current_data), dtype=np.int64)
+            ])
+        
+        self.current_position += self.max_seq_len
+        
+        return torch.tensor(tokens, dtype=torch.long)
+
+
+# ========== Training Class ==========
+class GPTTrainer:
+    """Main trainer class"""
+    
+    def __init__(self, args):
+        self.args = args
+        self.setup_logging()
+        
+        # Initialize distributed training
+        deepspeed.init_distributed()
+        self.world_size = dist.get_world_size()
+        self.rank = dist.get_rank()
+        self.local_rank = args.local_rank
+        self.is_main_process = self.rank == 0
+        
+        # Setup device
+        torch.cuda.set_device(self.local_rank)
+        self.device = torch.device(f"cuda:{self.local_rank}")
+        
+        # Initialize components
+        self.setup_model()
+        self.setup_tokenizer()
+        self.setup_data()
+        self.setup_gcs()
+        self.setup_logging_tools()
+        
+        # Training state
         self.global_step = 0
         self.files_processed = 0
-        self.start_time = time.time()
+        self.tokens_seen = 0
+        self.best_loss = float('inf')
         
-        # Setup logging and checkpointing
-        if self.is_main_process:
-            self.setup_logging()
-            self.setup_gcs_client()
-    
-    def setup_distributed(self):
-        """Setup distributed training"""
-        if self.training_config.distributed:
-            if 'RANK' in os.environ and 'WORLD_SIZE' in os.environ:
-                self.rank = int(os.environ['RANK'])
-                self.world_size = int(os.environ['WORLD_SIZE'])
-                self.local_rank = int(os.environ['LOCAL_RANK'])
-            else:
-                # Single GPU mode
-                self.rank = 0
-                self.world_size = 1
-                self.local_rank = 0
-            
-            torch.cuda.set_device(self.local_rank)
-            self.device = torch.device(f'cuda:{self.local_rank}')
-            
-            if self.world_size > 1:
-                dist.init_process_group(backend=self.training_config.ddp_backend)
-        else:
-            self.rank = 0
-            self.world_size = 1
-            self.local_rank = 0
-            self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-        
-        self.is_main_process = self.rank == 0
-    
-    def setup_training(self):
-        """Setup optimizer, scheduler, and DeepSpeed"""
-        # Create optimizer and scheduler
-        self.optimizer, self.scheduler = create_optimizer_and_scheduler(
-            self.model,
-            self.training_config
-        )
-        
-        # DeepSpeed configuration
-        ds_config = {
-            "train_batch_size": self.training_config.micro_batch_size * self.training_config.gradient_accumulation_steps * self.world_size,
-            "train_micro_batch_size_per_gpu": self.training_config.micro_batch_size,
-            "gradient_accumulation_steps": self.training_config.gradient_accumulation_steps,
-            "gradient_clipping": self.training_config.grad_clip,
-            "fp16": {
-                "enabled": self.model_config.use_mixed_precision,
-                "loss_scale": 0,
-                "loss_scale_window": 1000,
-                "initial_scale_power": 16,
-                "hysteresis": 2,
-                "min_loss_scale": 1
-            },
-            "zero_optimization": {
-                "stage": self.training_config.zero_stage,
-                "contiguous_gradients": True,
-                "overlap_comm": True,
-                "reduce_scatter": True,
-                "reduce_bucket_size": 5e7,
-                "allgather_bucket_size": 5e7
-            },
-            "activation_checkpointing": {
-                "partition_activations": True,
-                "cpu_checkpointing": False,
-                "contiguous_memory_optimization": False,
-                "number_checkpoints": None,
-                "synchronize_checkpoint_boundary": False,
-                "profile": False
-            }
-        }
-        
-        # Initialize DeepSpeed
-        self.model, self.optimizer, _, self.scheduler = deepspeed.initialize(
-            model=self.model,
-            optimizer=self.optimizer,
-            config=ds_config,
-            lr_scheduler=self.scheduler,
-            dist_init_required=False
-        )
-        
-        # Compile model if using PyTorch 2.0+
-        if self.training_config.compile_model and hasattr(torch, 'compile'):
-            self.model = torch.compile(self.model)
-    
     def setup_logging(self):
-        """Setup logging and monitoring"""
-        # Create directories
-        self.log_dir = Path(f"logs/run_{datetime.now().strftime('%Y%m%d_%H%M%S')}")
-        self.log_dir.mkdir(parents=True, exist_ok=True)
+        """Setup logging configuration"""
+        log_level = logging.INFO if self.args.local_rank in [-1, 0] else logging.WARNING
+        logging.basicConfig(
+            format="%(asctime)s - %(levelname)s - %(message)s",
+            level=log_level,
+            handlers=[
+                logging.StreamHandler(sys.stdout),
+                logging.FileHandler(self.args.log_dir / "training.log")
+            ]
+        )
+        self.logger = logging.getLogger(__name__)
         
-        # TensorBoard
-        self.writer = SummaryWriter(self.log_dir / "tensorboard")
+    def setup_model(self):
+        """Initialize model"""
+        config = MODEL_CONFIGS[self.args.model_size]
+        self.model = GPTModel(config)
         
-        # Weights & Biases
-        if self.training_config.use_wandb:
-            wandb.init(
-                project=self.training_config.wandb_project,
-                name=self.training_config.wandb_run_name or f"run_{datetime.now().strftime('%Y%m%d_%H%M%S')}",
-                config={
-                    "model_config": self.model_config.__dict__,
-                    "training_config": self.training_config.__dict__
-                }
-            )
+        if self.is_main_process:
+            num_params = self.model.get_num_params()
+            self.logger.info(f"Model initialized with {num_params:,} parameters")
+            self.logger.info(f"Model config: {config}")
     
-    def setup_gcs_client(self):
-        """Setup Google Cloud Storage client"""
-        self.gcs_client = storage.Client()
-        self.gcs_bucket = self.gcs_client.bucket(self.training_config.gcs_bucket)
+    def setup_tokenizer(self):
+        """Load tokenizer"""
+        try:
+            # First try loading from tokenizer_1B folder
+            tokenizer_path = Path("../tokenizer_1B")
+            if tokenizer_path.exists():
+                self.tokenizer = AutoTokenizer.from_pretrained(str(tokenizer_path), use_fast=True)
+            else:
+                # Fallback to model name
+                self.tokenizer = AutoTokenizer.from_pretrained("tokenizer_1B", use_fast=True)
+                
+            if self.is_main_process:
+                self.logger.info(f"Loaded tokenizer with vocab size: {len(self.tokenizer)}")
+        except Exception as e:
+            self.logger.error(f"Failed to load tokenizer: {e}")
+            sys.exit(1)
+    
+    def setup_data(self):
+        """Setup data loaders"""
+        # Get data files
+        data_files = list(Path(self.args.data_dir).glob("*.npz"))
+        if self.args.max_files:
+            data_files = data_files[:self.args.max_files]
+        
+        if not data_files:
+            self.logger.error(f"No .npz files found in {self.args.data_dir}")
+            sys.exit(1)
+        
+        if self.is_main_process:
+            self.logger.info(f"Found {len(data_files)} data files")
+        
+        # Create dataset
+        dataset = TokenDataset(
+            [str(f) for f in data_files],
+            max_seq_len=MODEL_CONFIGS[self.args.model_size]["max_seq_len"]
+        )
+        
+        # Create sampler and dataloader
+        sampler = DistributedSampler(
+            dataset,
+            num_replicas=self.world_size,
+            rank=self.rank,
+            shuffle=True
+        )
+        
+        self.train_dataloader = DataLoader(
+            dataset,
+            batch_size=self.args.micro_batch_size,
+            sampler=sampler,
+            num_workers=4,
+            pin_memory=True,
+            drop_last=True
+        )
+        
+        self.data_files = data_files
+        
+    def setup_gcs(self):
+        """Setup Google Cloud Storage"""
+        try:
+            self.storage_client = storage.Client()
+            self.gcs_bucket = self.storage_client.bucket("refocused-ai")
+            if self.is_main_process:
+                self.logger.info("✓ Connected to GCS bucket: refocused-ai")
+        except Exception as e:
+            self.logger.warning(f"GCS setup failed: {e}. Checkpointing may not work.")
+            self.gcs_bucket = None
+    
+    def setup_logging_tools(self):
+        """Setup TensorBoard and W&B"""
+        if self.is_main_process:
+            # TensorBoard
+            self.tb_writer = SummaryWriter(self.args.log_dir / "tensorboard")
+            
+            # Weights & Biases
+            if WANDB_AVAILABLE and self.args.wandb_project:
+                wandb.init(
+                    project=self.args.wandb_project,
+                    name=self.args.wandb_run_name or f"run_{datetime.now().strftime('%Y%m%d_%H%M%S')}",
+                    config=vars(self.args)
+                )
+                self.logger.info(f"✓ W&B initialized: {self.args.wandb_project}")
     
     def save_checkpoint(self, step: int, files_processed: int):
-        """Save checkpoint to disk and upload to GCS"""
+        """Save checkpoint and upload to GCS"""
         if not self.is_main_process:
             return
         
-        checkpoint_path = self.log_dir / f"checkpoint_step_{step}_files_{files_processed}"
-        checkpoint_path.mkdir(exist_ok=True)
-        
-        # Save model state
-        self.model.save_checkpoint(str(checkpoint_path))
-        
-        # Save training state
-        training_state = {
-            "global_step": self.global_step,
-            "files_processed": self.files_processed,
-            "model_config": self.model_config.__dict__,
-            "training_config": self.training_config.__dict__,
-        }
-        
-        with open(checkpoint_path / "training_state.json", "w") as f:
-            json.dump(training_state, f, indent=2)
-        
-        # Upload to GCS
-        logger.info(f"Uploading checkpoint to GCS...")
-        gcs_checkpoint_path = f"{self.training_config.gcs_checkpoint_prefix}/checkpoint_step_{step}_files_{files_processed}"
-        
-        for file_path in checkpoint_path.rglob("*"):
-            if file_path.is_file():
-                blob_name = f"{gcs_checkpoint_path}/{file_path.relative_to(checkpoint_path)}"
-                blob = self.gcs_bucket.blob(blob_name)
-                blob.upload_from_filename(str(file_path))
-        
-        logger.info(f"Checkpoint saved to GCS: {gcs_checkpoint_path}")
-        
-        # Clean up local checkpoint to save space
-        shutil.rmtree(checkpoint_path)
+        try:
+            ckpt_name = f"ckpt_step{step}_files{files_processed}"
+            ckpt_dir = self.args.checkpoint_dir / ckpt_name
+            ckpt_dir.mkdir(parents=True, exist_ok=True)
+            
+            # Save model with DeepSpeed
+            self.model_engine.save_checkpoint(str(ckpt_dir))
+            
+            # Save metadata
+            metadata = {
+                "step": step,
+                "files_processed": files_processed,
+                "tokens_seen": self.tokens_seen,
+                "timestamp": datetime.now().isoformat(),
+                "best_loss": self.best_loss,
+                "config": MODEL_CONFIGS[self.args.model_size]
+            }
+            
+            with open(ckpt_dir / "metadata.json", "w") as f:
+                json.dump(metadata, f, indent=2)
+            
+            # Upload to GCS with retries
+            if self.gcs_bucket:
+                @retry.Retry(predicate=retry.if_exception_type(Exception))
+                def upload_file(local_path, gcs_path):
+                    blob = self.gcs_bucket.blob(gcs_path)
+                    blob.upload_from_filename(str(local_path))
+                
+                # Upload all checkpoint files
+                for file_path in ckpt_dir.rglob("*"):
+                    if file_path.is_file():
+                        relative_path = file_path.relative_to(ckpt_dir)
+                        gcs_path = f"Checkpoints/{ckpt_name}/{relative_path}"
+                        
+                        try:
+                            upload_file(file_path, gcs_path)
+                        except Exception as e:
+                            self.logger.warning(f"Failed to upload {file_path}: {e}")
+                
+                self.logger.info(f"✓ Checkpoint uploaded to GCS: {ckpt_name}")
+                
+                # Clean up local checkpoint to save space
+                shutil.rmtree(ckpt_dir)
+                
+        except Exception as e:
+            self.logger.error(f"Checkpoint save failed: {e}")
     
-    def log_metrics(self, metrics: dict, step: int):
-        """Log metrics to all tracking systems"""
-        if not self.is_main_process:
-            return
-        
-        # Add computed metrics
-        elapsed_time = time.time() - self.start_time
-        metrics['samples_per_second'] = step * self.training_config.micro_batch_size / elapsed_time
-        metrics['files_processed'] = self.files_processed
-        
-        # TensorBoard
-        for key, value in metrics.items():
-            self.writer.add_scalar(key, value, step)
-        
-        # Weights & Biases
-        if self.training_config.use_wandb:
-            wandb.log(metrics, step=step)
-        
-        # Console
-        logger.info(f"Step {step}: " + " | ".join([f"{k}: {v:.4f}" for k, v in metrics.items()]))
-    
-    def train_step(self, batch: dict) -> dict:
+    def train_step(self, batch):
         """Single training step"""
-        self.model.train()
+        # Move batch to device
+        input_ids = batch[:, :-1].to(self.device)
+        labels = batch[:, 1:].to(self.device)
         
         # Forward pass
-        outputs = self.model(
-            input_ids=batch["input_ids"].to(self.device),
-            attention_mask=batch["attention_mask"].to(self.device),
-            labels=batch["labels"].to(self.device)
-        )
-        
+        outputs = self.model_engine(input_ids, labels=labels)
         loss = outputs["loss"]
         
         # Backward pass (handled by DeepSpeed)
-        self.model.backward(loss)
-        self.model.step()
+        self.model_engine.backward(loss)
+        self.model_engine.step()
         
-        # Get current learning rate
-        lr = self.scheduler.get_last_lr()[0]
+        # Update metrics
+        self.tokens_seen += input_ids.numel() * self.world_size
         
-        return {
-            "loss": loss.item(),
-            "learning_rate": lr,
-            "grad_norm": self.model.get_global_grad_norm()
-        }
+        return loss.item()
+    
+    def log_metrics(self, loss: float, step: int):
+        """Log metrics to various platforms"""
+        if not self.is_main_process:
+            return
+        
+        # Calculate metrics
+        if hasattr(self, 'last_log_time'):
+            time_delta = time.time() - self.last_log_time
+            tokens_delta = self.tokens_seen - self.last_tokens_seen
+            tokens_per_sec = tokens_delta / time_delta if time_delta > 0 else 0
+        else:
+            tokens_per_sec = 0
+        
+        self.last_log_time = time.time()
+        self.last_tokens_seen = self.tokens_seen
+        
+        # Get learning rate
+        lr = self.model_engine.get_lr()[0]
+        
+        # TensorBoard
+        self.tb_writer.add_scalar("train/loss", loss, step)
+        self.tb_writer.add_scalar("train/learning_rate", lr, step)
+        self.tb_writer.add_scalar("train/tokens_per_second", tokens_per_sec, step)
+        self.tb_writer.add_scalar("train/tokens_seen", self.tokens_seen, step)
+        
+        # Weights & Biases
+        if WANDB_AVAILABLE and hasattr(self, 'wandb_run'):
+            wandb.log({
+                "loss": loss,
+                "learning_rate": lr,
+                "tokens_per_second": tokens_per_sec,
+                "tokens_seen": self.tokens_seen,
+                "files_processed": self.files_processed,
+                "step": step
+            })
+        
+        # Console log
+        self.logger.info(
+            f"Step {step} | Loss: {loss:.4f} | LR: {lr:.2e} | "
+            f"Tokens/s: {tokens_per_sec:.0f} | Files: {self.files_processed}"
+        )
     
     def train(self):
         """Main training loop"""
-        # Create data loader
-        dataloader = create_dataloaders(
-            bucket_name=self.training_config.gcs_bucket,
-            prefix=self.training_config.gcs_data_prefix,
-            max_seq_len=self.model_config.max_seq_len,
-            batch_size=self.training_config.micro_batch_size,
-            num_files=self.training_config.test_num_files if hasattr(self.training_config, 'test_num_files') else None,
-            num_workers=self.training_config.num_workers
+        self.logger.info("Starting training...")
+        
+        # Initialize DeepSpeed
+        self.model_engine, self.optimizer, _, _ = deepspeed.initialize(
+            args=self.args,
+            model=self.model,
+            model_parameters=self.model.parameters(),
+            config=self.args.deepspeed_config
         )
         
         # Training loop
-        self.model.train()
-        running_loss = 0.0
-        last_file_idx = -1
+        self.model_engine.train()
+        train_iter = iter(self.train_dataloader)
         
-        for step, batch in enumerate(dataloader):
-            # Track file progress
-            current_file_idx = batch["file_indices"][0].item()
-            if current_file_idx != last_file_idx:
-                self.files_processed += 1
-                last_file_idx = current_file_idx
+        with tqdm(total=len(self.data_files), desc="Files processed", disable=not self.is_main_process) as pbar:
+            while self.files_processed < len(self.data_files):
+                try:
+                    batch = next(train_iter)
+                except StopIteration:
+                    train_iter = iter(self.train_dataloader)
+                    batch = next(train_iter)
+                    self.files_processed += 1
+                    pbar.update(1)
                 
-                # Check if we need to save checkpoint
-                if self.files_processed % self.training_config.train_files_per_checkpoint == 0:
+                # Training step
+                loss = self.train_step(batch)
+                self.global_step += 1
+                
+                # Update best loss
+                if loss < self.best_loss:
+                    self.best_loss = loss
+                
+                # Logging
+                if self.global_step % self.args.log_interval == 0:
+                    self.log_metrics(loss, self.global_step)
+                
+                # Checkpointing
+                if self.files_processed % self.args.checkpoint_interval == 0 and self.files_processed > 0:
                     self.save_checkpoint(self.global_step, self.files_processed)
-            
-            # Training step
-            metrics = self.train_step(batch)
-            running_loss += metrics["loss"]
-            
-            # Logging
-            if self.global_step % self.training_config.log_interval == 0:
-                avg_loss = running_loss / self.training_config.log_interval
-                self.log_metrics({
-                    "train/loss": avg_loss,
-                    "train/learning_rate": metrics["learning_rate"],
-                    "train/grad_norm": metrics["grad_norm"]
-                }, self.global_step)
-                running_loss = 0.0
-            
-            # Increment global step
-            self.global_step += 1
-            
-            # Check if we've reached max steps
-            if self.global_step >= self.training_config.max_steps:
-                logger.info(f"Reached max steps ({self.training_config.max_steps})")
-                break
+                
+                # Early stopping for test mode
+                if self.args.mode == "test" and self.files_processed >= 5:
+                    break
         
         # Final checkpoint
         self.save_checkpoint(self.global_step, self.files_processed)
         
-        # Cleanup
         if self.is_main_process:
-            self.writer.close()
-            if self.training_config.use_wandb:
-                wandb.finish()
+            self.logger.info("✅ Training completed!")
+            self.logger.info(f"Total steps: {self.global_step}")
+            self.logger.info(f"Total tokens: {self.tokens_seen:,}")
+            self.logger.info(f"Files processed: {self.files_processed}")
 
 
+# ========== Main ==========
 def main():
-    """Main entry point"""
-    import argparse
+    parser = argparse.ArgumentParser(description="Train GPT model from scratch")
     
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--mode", choices=["test", "production"], default="test",
-                        help="Training mode: test (25 files) or production (full)")
-    parser.add_argument("--resume", type=str, default=None,
-                        help="Resume from checkpoint")
+    # Model arguments
+    parser.add_argument("--model_size", type=str, default="1.2B",
+                       choices=["125M", "350M", "760M", "1.2B"],
+                       help="Model size configuration")
+    
+    # Data arguments
+    parser.add_argument("--data_dir", type=str, required=True,
+                       help="Directory containing tokenized .npz files")
+    parser.add_argument("--max_files", type=int, default=None,
+                       help="Maximum number of files to process")
+    
+    # Training arguments
+    parser.add_argument("--mode", type=str, choices=["test", "production"],
+                       required=True, help="Training mode")
+    parser.add_argument("--micro_batch_size", type=int, default=8,
+                       help="Micro batch size per GPU")
+    
+    # Checkpointing
+    parser.add_argument("--checkpoint_dir", type=Path, default=Path("checkpoints"),
+                       help="Directory to save checkpoints")
+    parser.add_argument("--checkpoint_interval", type=int, default=5,
+                       help="Save checkpoint every N files")
+    
+    # Logging
+    parser.add_argument("--log_dir", type=Path, default=Path("logs"),
+                       help="Directory for logs")
+    parser.add_argument("--log_interval", type=int, default=10,
+                       help="Log metrics every N steps")
+    parser.add_argument("--eval_interval", type=int, default=500,
+                       help="Evaluate every N steps")
+    
+    # W&B
+    parser.add_argument("--wandb_project", type=str, default=None,
+                       help="Weights & Biases project name")
+    parser.add_argument("--wandb_run_name", type=str, default=None,
+                       help="Weights & Biases run name")
+    
+    # DeepSpeed
+    parser.add_argument("--local_rank", type=int, default=-1,
+                       help="Local rank for distributed training")
+    parser.add_argument("--deepspeed_config", type=str, default=None,
+                       help="DeepSpeed configuration file")
+    
     args = parser.parse_args()
     
-    # Get configuration
-    if args.mode == "test":
-        model_config, training_config = get_test_config()
-    else:
-        model_config, training_config = get_production_config()
+    # Create directories
+    args.log_dir.mkdir(parents=True, exist_ok=True)
+    args.checkpoint_dir.mkdir(parents=True, exist_ok=True)
     
-    if args.resume:
-        training_config.resume_from_checkpoint = args.resume
+    # Load DeepSpeed config if provided
+    if args.deepspeed_config and Path(args.deepspeed_config).exists():
+        with open(args.deepspeed_config, 'r') as f:
+            args.deepspeed_config = json.load(f)
     
-    # Log configuration
-    logger.info(f"Model parameters: {model_config.n_params / 1e9:.2f}B")
-    logger.info(f"Training mode: {args.mode}")
-    
-    # Estimate dataset size
-    logger.info("Estimating dataset size...")
-    dataset_info = estimate_dataset_size(
-        training_config.gcs_bucket,
-        training_config.gcs_data_prefix
-    )
-    logger.info(f"Dataset info: {dataset_info}")
-    
-    # Create trainer and start training
-    trainer = Trainer(model_config, training_config)
+    # Initialize trainer and start training
+    trainer = GPTTrainer(args)
     trainer.train()
 
 
