@@ -48,14 +48,14 @@ if [ "$AVAILABLE_SPACE" -lt 100 ]; then
 fi
 
 # 6. Count files to download
-echo "Counting files in gs://refocused-ai/tokenized_data/..."
-TOTAL_FILES=$(gsutil ls "gs://refocused-ai/tokenized_data/*.npz" 2>/dev/null | wc -l) || {
+echo "Counting files in gs://refocused-ai/..."
+TOTAL_FILES=$(gsutil ls "gs://refocused-ai/*.npz" 2>/dev/null | wc -l) || {
     echo "ERROR: Failed to list files from GCS. Check your credentials and bucket access."
     exit 1
 }
 
 if [ "$TOTAL_FILES" -eq 0 ]; then
-    echo "ERROR: No tokenized files found in gs://refocused-ai/tokenized_data/"
+    echo "ERROR: No tokenized files found in gs://refocused-ai/"
     exit 1
 fi
 
@@ -66,7 +66,7 @@ echo "This represents approximately 21-22 billion tokens."
 echo ""
 echo "Estimating download size..."
 # Get size of first few files to estimate
-SAMPLE_SIZE=$(gsutil du -s "gs://refocused-ai/tokenized_data/*.npz" 2>/dev/null | head -5 | awk '{sum+=$1} END {print sum/5/1024/1024/1024}') || SAMPLE_SIZE=1
+SAMPLE_SIZE=$(gsutil du -s "gs://refocused-ai/*.npz" 2>/dev/null | head -5 | awk '{sum+=$1} END {print sum/5/1024/1024/1024}') || SAMPLE_SIZE=1
 ESTIMATED_TOTAL_SIZE=$(echo "$SAMPLE_SIZE * $TOTAL_FILES" | bc -l | xargs printf "%.1f")
 echo "Estimated total size: ${ESTIMATED_TOTAL_SIZE}GB"
 
@@ -94,10 +94,10 @@ echo "This may take a while depending on your connection speed..."
 START_TIME=$(date +%s)
 
 # Use gsutil with multi-threading and retry
-gsutil -m cp -r "gs://refocused-ai/tokenized_data/*.npz" "$DATA_DIR/" || {
+gsutil -m cp -r "gs://refocused-ai/*.npz" "$DATA_DIR/" || {
     echo "ERROR: Download failed. Attempting retry..."
     # Retry with resumable uploads
-    gsutil -m cp -c -r "gs://refocused-ai/tokenized_data/*.npz" "$DATA_DIR/" || {
+    gsutil -m cp -c -r "gs://refocused-ai/*.npz" "$DATA_DIR/" || {
         echo "ERROR: Download failed after retry."
         exit 1
     }
