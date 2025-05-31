@@ -3,6 +3,21 @@
 
 echo "=== ReFocused-AI Training Environment Setup ==="
 
+# Check Python version and ensure consistency
+echo "Checking Python version..."
+python_version=$(python3 --version)
+echo "Using $python_version"
+
+# Check if Python version is 3.10 (recommended for all dependencies)
+if [[ "$python_version" != *"Python 3.10"* ]]; then
+    echo "WARNING: Recommended Python version is 3.10.x"
+    echo "Continue anyway? (y/n)"
+    read -r response
+    if [ "$response" != "y" ]; then
+        exit 1
+    fi
+fi
+
 # Check if running on GPU
 if ! command -v nvidia-smi &> /dev/null; then
     echo "WARNING: nvidia-smi not found. GPU might not be available."
@@ -18,23 +33,23 @@ source venv/bin/activate
 
 # Upgrade pip
 echo "Upgrading pip..."
-pip install --upgrade pip
+pip install --upgrade pip==23.1.2
 
-# Install PyTorch with CUDA support
+# Install PyTorch with CUDA support - fixed version
 echo "Installing PyTorch with CUDA 12.1 support..."
 pip install torch==2.1.0 torchvision==0.16.0 torchaudio==2.1.0 --index-url https://download.pytorch.org/whl/cu121
 
-# Install core dependencies
+# Install core dependencies with exact versions
 echo "Installing core dependencies..."
 pip install -r requirements.txt
 
-# Install Flash Attention 2 for efficiency
-echo "Installing Flash Attention 2..."
-pip install flash-attn --no-build-isolation
+# Install Flash Attention 2 - already in requirements.txt with fixed version
+echo "Verifying Flash Attention 2 installation..."
+pip show flash-attn
 
-# Install additional monitoring tools
+# Install additional monitoring tools - with fixed versions
 echo "Installing monitoring tools..."
-pip install wandb tensorboard gpustat
+pip install wandb==0.16.0 tensorboard==2.15.0 gpustat==1.1.1
 
 # Setup Google Cloud authentication
 echo "Setting up Google Cloud authentication..."
@@ -72,6 +87,8 @@ export TOKENIZERS_PARALLELISM=false
 export PYTHONPATH=\${PYTHONPATH}:\$(pwd)
 export WANDB_PROJECT=refocused-ai-1b
 export GOOGLE_APPLICATION_CREDENTIALS=${GOOGLE_APPLICATION_CREDENTIALS}
+# Lock Python version to match current
+export PYTHON_VERSION="$python_version"
 EOF
 
 echo "Environment setup complete!"

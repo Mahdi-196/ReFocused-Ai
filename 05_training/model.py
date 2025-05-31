@@ -8,7 +8,14 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torch.nn import LayerNorm
 from typing import Optional, Tuple
-from flash_attn import flash_attn_func
+# Update flash_attn import with version check
+try:
+    from flash_attn import flash_attn_func
+    has_flash_attn = True
+except ImportError:
+    has_flash_attn = False
+    flash_attn_func = None
+    print("WARNING: flash_attn not available. Using standard attention instead.")
 from model_config import ModelConfig
 
 
@@ -82,7 +89,7 @@ class GroupedQueryAttention(nn.Module):
         self.k_norm = RMSNorm(self.head_dim)
         
         self.dropout = nn.Dropout(config.attention_dropout)
-        self.use_flash = config.use_flash_attention
+        self.use_flash = config.use_flash_attention and has_flash_attn
         
         if config.use_rope:
             self.rotary_emb = RotaryEmbedding(self.head_dim, config.max_seq_len)

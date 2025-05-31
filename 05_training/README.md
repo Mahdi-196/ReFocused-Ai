@@ -171,4 +171,37 @@ When modifying the training code:
 - [HybridNorm Paper](https://arxiv.org/abs/2503.04598)
 - [Flash Attention 2](https://github.com/Dao-AILab/flash-attention)
 - [DeepSpeed Documentation](https://www.deepspeed.ai/)
-- [Efficient Training Guide](https://www.e2enetworks.com/blog/efficiently-training-transformers-a-comprehensive-guide-to-high-performance-nlp-models) 
+- [Efficient Training Guide](https://www.e2enetworks.com/blog/efficiently-training-transformers-a-comprehensive-guide-to-high-performance-nlp-models)
+
+## Environment Setup
+
+### Python Version Requirements
+
+This training module requires Python 3.10.x for optimal compatibility with all dependencies. Using other Python versions may cause compatibility issues with certain libraries.
+
+### Fixed Version Dependencies
+
+To ensure reproducibility and consistency, we now use exact versions for all dependencies:
+
+- PyTorch: 2.1.0 (with CUDA 12.1)
+- Transformers: 4.35.0
+- DeepSpeed: 0.12.0
+- TensorBoard: 2.15.0
+- Flash Attention: 2.3.0
+- Accelerate: 0.25.0
+
+The `setup_environment.sh` script checks for Python version consistency and installs all dependencies with their exact versions.
+
+### Version Consistency
+
+The training scripts now include version checks to ensure all dependencies are installed with the correct versions. This prevents issues that can arise from mismatched library versions.
+
+## Version Verification
+
+When running training scripts, they will:
+
+1. Verify the Python version matches the one used during setup
+2. Check that TensorBoard and other key dependencies have the correct versions
+3. Provide warnings if any version mismatches are detected
+
+If you encounter any issues with library compatibility, please check the logs for version mismatch warnings. 
