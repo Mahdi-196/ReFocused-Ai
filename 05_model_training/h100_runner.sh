@@ -39,22 +39,14 @@ download_data() {
     echo "Downloading training data..."
     if [ "$1" == "test" ]; then
         echo "Test mode: Downloading only $MAX_FILES files"
-        if [ -z "$DATA_REMOTE_PATH" ]; then
-            python3 download_data.py --bucket $BUCKET_NAME \
-                --local_dir $DATA_LOCAL_DIR --max_files $MAX_FILES --workers 8
-        else
-            python3 download_data.py --bucket $BUCKET_NAME --remote_path "$DATA_REMOTE_PATH" \
-                --local_dir $DATA_LOCAL_DIR --max_files $MAX_FILES --workers 8
-        fi
+        # Always use root path (no --remote_path parameter)
+        python3 download_data.py --bucket $BUCKET_NAME \
+            --local_dir $DATA_LOCAL_DIR --max_files $MAX_FILES --workers 8
     else
         echo "Full mode: Downloading all available files"
-        if [ -z "$DATA_REMOTE_PATH" ]; then
-            python3 download_data.py --bucket $BUCKET_NAME \
-                --local_dir $DATA_LOCAL_DIR --workers 16
-        else
-            python3 download_data.py --bucket $BUCKET_NAME --remote_path "$DATA_REMOTE_PATH" \
-                --local_dir $DATA_LOCAL_DIR --workers 16
-        fi
+        # Always use root path (no --remote_path parameter)
+        python3 download_data.py --bucket $BUCKET_NAME \
+            --local_dir $DATA_LOCAL_DIR --workers 16
     fi
 }
 
