@@ -30,12 +30,15 @@ def download_blob(bucket, blob, local_dir):
         
         # Skip if file exists and has same size
         if local_file_path.exists():
-            if local_file_path.stat().st_size == blob.size:
+            if blob.size is not None and local_file_path.stat().st_size == blob.size:
                 logger.info(f"Skipping {blob.name} (already exists with same size)")
                 return True
         
         # Download file
-        logger.info(f"Downloading {blob.name} ({blob.size / 1024 / 1024:.1f} MB)")
+        if blob.size is not None:
+            logger.info(f"Downloading {blob.name} ({blob.size / 1024 / 1024:.1f} MB)")
+        else:
+            logger.info(f"Downloading {blob.name} (size unknown)")
         blob.download_to_filename(str(local_file_path))
         return True
     except Exception as e:
@@ -58,9 +61,14 @@ def list_all_files(bucket, max_files=50):
     all_npz_files = []
     
     for blob in bucket.list_blobs():
+        # Safely calculate size
+        size_mb = None
+        if blob.size is not None:
+            size_mb = blob.size / (1024 * 1024)
+            
         file_info = {
             'name': blob.name,
-            'size_mb': blob.size / (1024 * 1024),
+            'size_mb': size_mb,
             'updated': blob.updated
         }
         all_files.append(file_info)
@@ -112,7 +120,10 @@ def download_data(bucket_name, remote_path, local_dir, max_workers=8, max_files=
         if all_npz_files:
             logger.info("Sample .npz files:")
             for file_info in all_npz_files[:5]:
-                logger.info(f" - {file_info['name']} ({file_info['size_mb']:.2f} MB)")
+                if file_info['size_mb'] is not None:
+                    logger.info(f" - {file_info['name']} ({file_info['size_mb']:.2f} MB)")
+                else:
+                    logger.info(f" - {file_info['name']} (size unknown)")
             
         # If remote_path is specified, filter by it
         npz_blobs = []
@@ -165,9 +176,20 @@ def download_data(bucket_name, remote_path, local_dir, max_workers=8, max_files=
         
         if success_count > 0:
             logger.info(f"Downloaded {success_count}/{len(npz_blobs)} files in {duration:.1f}s")
-            total_size_mb = sum([b.size for b in npz_blobs]) / (1024 * 1024)
-            logger.info(f"Total data downloaded: {total_size_mb:.2f} MB")
-            logger.info(f"Average speed: {total_size_mb / duration:.2f} MB/s")
+            
+            # Calculate total size safely
+            total_size_mb = 0
+            valid_sizes = 0
+            for b in npz_blobs:
+                if b.size is not None:
+                    total_size_mb += b.size / (1024 * 1024)
+                    valid_sizes += 1
+                    
+            if valid_sizes > 0:
+                logger.info(f"Total data downloaded: {total_size_mb:.2f} MB")
+                logger.info(f"Average speed: {total_size_mb / duration:.2f} MB/s")
+            else:
+                logger.info("Total data size unknown")
             
             # Verify a sample file if available
             try:
