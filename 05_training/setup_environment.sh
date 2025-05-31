@@ -1,0 +1,85 @@
+#!/bin/bash
+# Setup script for ReFocused-AI 1B model training environment
+
+echo "=== ReFocused-AI Training Environment Setup ==="
+
+# Check if running on GPU
+if ! command -v nvidia-smi &> /dev/null; then
+    echo "WARNING: nvidia-smi not found. GPU might not be available."
+else
+    echo "GPU Info:"
+    nvidia-smi --query-gpu=name,memory.total --format=csv
+fi
+
+# Create virtual environment
+echo "Creating virtual environment..."
+python3 -m venv venv
+source venv/bin/activate
+
+# Upgrade pip
+echo "Upgrading pip..."
+pip install --upgrade pip
+
+# Install PyTorch with CUDA support
+echo "Installing PyTorch with CUDA 12.1 support..."
+pip install torch==2.1.0 torchvision==0.16.0 torchaudio==2.1.0 --index-url https://download.pytorch.org/whl/cu121
+
+# Install core dependencies
+echo "Installing core dependencies..."
+pip install -r requirements.txt
+
+# Install Flash Attention 2 for efficiency
+echo "Installing Flash Attention 2..."
+pip install flash-attn --no-build-isolation
+
+# Install additional monitoring tools
+echo "Installing monitoring tools..."
+pip install wandb tensorboard gpustat
+
+# Setup Google Cloud authentication
+echo "Setting up Google Cloud authentication..."
+if [ ! -f "$GOOGLE_APPLICATION_CREDENTIALS" ]; then
+    echo "WARNING: GOOGLE_APPLICATION_CREDENTIALS not set. You'll need to authenticate with GCS."
+    echo "Run: export GOOGLE_APPLICATION_CREDENTIALS=/path/to/your/credentials.json"
+fi
+
+# Create necessary directories
+echo "Creating necessary directories..."
+mkdir -p logs
+mkdir -p checkpoints
+mkdir -p cache
+
+# Download tokenizer if not present
+if [ ! -d "../tokenizer_1B" ]; then
+    echo "Tokenizer not found in ../tokenizer_1B"
+    echo "Please ensure tokenizer files are in the correct location"
+else
+    echo "Tokenizer found at ../tokenizer_1B"
+fi
+
+# Set environment variables for optimal performance
+echo "Setting environment variables..."
+export OMP_NUM_THREADS=8
+export CUDA_LAUNCH_BLOCKING=0
+export TOKENIZERS_PARALLELISM=false
+
+# Create environment file
+cat > .env << EOF
+# ReFocused-AI Training Environment Variables
+export OMP_NUM_THREADS=8
+export CUDA_LAUNCH_BLOCKING=0
+export TOKENIZERS_PARALLELISM=false
+export PYTHONPATH=\${PYTHONPATH}:\$(pwd)
+export WANDB_PROJECT=refocused-ai-1b
+export GOOGLE_APPLICATION_CREDENTIALS=${GOOGLE_APPLICATION_CREDENTIALS}
+EOF
+
+echo "Environment setup complete!"
+echo ""
+echo "To activate the environment, run:"
+echo "  source venv/bin/activate"
+echo "  source .env"
+echo ""
+echo "To start training:"
+echo "  Test run (25 files): python train.py --mode test"
+echo "  Full training: python train.py --mode production" 
