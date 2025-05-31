@@ -25,6 +25,13 @@ import logging
 from datetime import datetime
 import shutil
 
+# Check NumPy version - must be 1.x for wandb/tensorboard compatibility
+import numpy as np
+if not np.__version__.startswith('1.'):
+    print(f"WARNING: NumPy version {np.__version__} detected. wandb and tensorboard require NumPy 1.x.")
+    print("Please install numpy==1.24.0 for compatibility.")
+    sys.exit(1)
+
 from model import GPTModel
 from model_config import ModelConfig, TrainingConfig, get_test_config, get_production_config
 from data_loader import create_dataloaders, estimate_dataset_size
@@ -36,7 +43,9 @@ required_packages = {
     "torch": "2.1.0",
     "transformers": "4.35.0",
     "tensorboard": "2.15.0",
-    "deepspeed": "0.12.0"
+    "deepspeed": "0.12.0",
+    "numpy": "1.24.0",
+    "packaging": "23.2"
 }
 
 for package, version in required_packages.items():
