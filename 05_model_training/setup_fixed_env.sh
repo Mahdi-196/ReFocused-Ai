@@ -15,6 +15,11 @@ mkdir -p /home/ubuntu/training_data/cache
 mkdir -p /home/ubuntu/ReFocused-Ai/models/gpt_750m
 mkdir -p /home/ubuntu/ReFocused-Ai/models/tokenizer/tokenizer
 
+# Install system dependencies first
+echo "Installing system dependencies..."
+sudo apt-get update
+sudo apt-get install -y build-essential libopenmpi-dev
+
 # Install build dependencies first
 echo "Installing build dependencies..."
 pip install --upgrade pip
@@ -28,6 +33,10 @@ pip install numpy==1.24.3
 # Install PyTorch with correct CUDA version
 echo "Installing PyTorch with CUDA support..."
 pip install torch==2.1.0+cu121 torchvision==0.16.0+cu121 torchaudio==2.1.0+cu121 --index-url https://download.pytorch.org/whl/cu121
+
+# Install mpi4py separately with OpenMPI
+echo "Installing mpi4py with OpenMPI..."
+pip install mpi4py
 
 # Install other packages from fixed requirements
 echo "Installing remaining dependencies..."
