@@ -146,19 +146,43 @@ def update_configuration_files():
     h100_runner_path = os.path.join(MODEL_TRAINING_DIR, "h100_runner.sh")
     if os.path.exists(h100_runner_path):
         try:
-            run_command(f"sed -i 's/DATA_REMOTE_PATH=\"tokenized_data\"/DATA_REMOTE_PATH=\"{DATA_REMOTE_PATH}\"/' {h100_runner_path}")
-            print("Updated h100_runner.sh with correct data path")
-        except:
-            print("Could not update h100_runner.sh")
+            # Force DATA_REMOTE_PATH to empty string regardless of current value
+            run_command(f"sed -i 's/DATA_REMOTE_PATH=\".*\"/DATA_REMOTE_PATH=\"\"/' {h100_runner_path}")
+            print("Updated h100_runner.sh with empty data path")
+        except Exception as e:
+            print(f"Could not update h100_runner.sh: {e}")
     
     # Update h100_multi_gpu.yaml file
     multi_gpu_config_path = os.path.join(MODEL_TRAINING_DIR, "config", "h100_multi_gpu.yaml")
     if os.path.exists(multi_gpu_config_path):
         try:
-            run_command(f"sed -i 's/remote_data_path: \"tokenized_data\"/remote_data_path: \"{DATA_REMOTE_PATH}\"/' {multi_gpu_config_path}")
-            print("Updated h100_multi_gpu.yaml with correct data path")
-        except:
-            print("Could not update h100_multi_gpu.yaml")
+            # Force remote_data_path to empty string regardless of current value
+            run_command(f"sed -i 's/remote_data_path: \".*\"/remote_data_path: \"\"/' {multi_gpu_config_path}")
+            print("Updated h100_multi_gpu.yaml with empty data path")
+        except Exception as e:
+            print(f"Could not update h100_multi_gpu.yaml: {e}")
+    
+    # Update training_config.yaml file
+    training_config_path = os.path.join(MODEL_TRAINING_DIR, "config", "training_config.yaml")
+    if os.path.exists(training_config_path):
+        try:
+            # Force remote_data_path to empty string regardless of current value
+            run_command(f"sed -i 's/remote_data_path: \".*\"/remote_data_path: \"\"/' {training_config_path}")
+            print("Updated training_config.yaml with empty data path")
+        except Exception as e:
+            print(f"Could not update training_config.yaml: {e}")
+    
+    # Run the fix_data_path.py script if it exists
+    fix_script_path = os.path.join(MODEL_TRAINING_DIR, "fix_data_path.py")
+    if os.path.exists(fix_script_path):
+        try:
+            print("Running comprehensive path fix script...")
+            run_command(f"python {fix_script_path}")
+            print("Successfully ran fix_data_path.py")
+        except Exception as e:
+            print(f"Could not run fix_data_path.py: {e}")
+    else:
+        print("fix_data_path.py not found, skipping comprehensive fixes")
 
 def download_training_data():
     print(f"\n--- Downloading training data (first {NUM_FILES_TO_DOWNLOAD} files) ---")
