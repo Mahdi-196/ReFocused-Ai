@@ -39,7 +39,7 @@ training:
 data:
   # Google Cloud Storage paths
   remote_data_bucket: "refocused-ai"
-  remote_data_path: "tokenized_data"
+  remote_data_path: ""
   use_gcs: false
   gcs_read_client_type: "anonymous" # Changed from gcs_client_type, set to anonymous for public downloads
   
