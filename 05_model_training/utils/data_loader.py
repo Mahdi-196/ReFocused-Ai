@@ -153,7 +153,7 @@ class GCSDataManager:
     
     def __init__(self, bucket_name: str, remote_path: str, local_path: str, use_gcs: bool = True, gcs_read_client_type: str = 'default'):
         self.bucket_name = bucket_name
-        self.remote_path = remote_path.rstrip('/')
+        self.remote_path = remote_path.rstrip('/') if remote_path else ""
         self.local_path = Path(local_path)
         self.use_gcs = use_gcs
         
@@ -209,10 +209,16 @@ class GCSDataManager:
             # For now, returning True means "no sync needed/attempted from this method's perspective if client is missing".
             return True 
             
-        logger.info(f"Syncing data from gs://{self.bucket_name}/{self.remote_path} to {self.local_path} using read client.")
+        path_display = self.remote_path if self.remote_path else "(root)"
+        logger.info(f"Syncing data from gs://{self.bucket_name}/{path_display} to {self.local_path} using read client.")
         
         # List remote files using read_bucket
-        blobs = list(self.read_bucket.list_blobs(prefix=self.remote_path))
+        if self.remote_path:
+            blobs = list(self.read_bucket.list_blobs(prefix=self.remote_path))
+        else:
+            # If remote_path is empty, list all blobs at root
+            blobs = list(self.read_bucket.list_blobs())
+            
         npz_blobs = [b for b in blobs if b.name.endswith('.npz')]
         
         logger.info(f"Found {len(npz_blobs)} .npz files to download")
@@ -221,7 +227,11 @@ class GCSDataManager:
             """Download a single blob"""
             try:
                 # Get relative path from remote_path
-                relative_path = blob.name[len(self.remote_path):].lstrip('/')
+                if self.remote_path:
+                    relative_path = blob.name[len(self.remote_path):].lstrip('/')
+                else:
+                    relative_path = blob.name
+                    
                 local_file_path = self.local_path / relative_path
                 
                 # Create parent directories
