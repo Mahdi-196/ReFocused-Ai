@@ -1,6 +1,7 @@
 import os
 import subprocess
 import requests
+import time
 from pathlib import Path
 
 # Configuration
@@ -19,6 +20,7 @@ TENSORBOARD_LOG_DIR = LOGS_DIR
 TENSORBOARD_PORT = 6006
 
 DATA_DOWNLOAD_BUCKET = "refocused-ai"
+DATA_REMOTE_PATH = ""  # Empty for root of bucket
 NUM_FILES_TO_DOWNLOAD = 25
 
 # Use the system Python - more reliable than hardcoding version
@@ -67,13 +69,12 @@ def install_python_dependencies():
         try:
             run_command(f"{PYTHON_EXECUTABLE} -m pip install -r {requirements_file}")
         except subprocess.CalledProcessError:
-            print("Failed to install all dependencies. Trying with --no-deps flag for problematic packages.")
+            print("Failed to install all dependencies. Installing essential packages individually.")
             # Install PyTorch with CUDA
             run_command(f"{PYTHON_EXECUTABLE} -m pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121")
-            # Try again with no dependencies for core packages
-            run_command(f"{PYTHON_EXECUTABLE} -m pip install --no-deps -r {requirements_file}")
             # Install critical packages individually
             run_command(f"{PYTHON_EXECUTABLE} -m pip install transformers deepspeed google-cloud-storage requests")
+            run_command(f"{PYTHON_EXECUTABLE} -m pip install numpy pyyaml wandb tensorboard")
     else:
         print("requirements_training.txt not found, installing packages individually.")
         run_command(f"{PYTHON_EXECUTABLE} -m pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121")
@@ -139,19 +140,144 @@ def create_model_directory():
             print(f"Error creating tokenizer files: {e}")
             print("You may need to create these manually")
 
+def update_configuration_files():
+    print("\n--- Updating configuration files ---")
+    # Update h100_runner.sh script
+    h100_runner_path = os.path.join(MODEL_TRAINING_DIR, "h100_runner.sh")
+    if os.path.exists(h100_runner_path):
+        try:
+            run_command(f"sed -i 's/DATA_REMOTE_PATH=\"tokenized_data\"/DATA_REMOTE_PATH=\"{DATA_REMOTE_PATH}\"/' {h100_runner_path}")
+            print("Updated h100_runner.sh with correct data path")
+        except:
+            print("Could not update h100_runner.sh")
+    
+    # Update h100_multi_gpu.yaml file
+    multi_gpu_config_path = os.path.join(MODEL_TRAINING_DIR, "config", "h100_multi_gpu.yaml")
+    if os.path.exists(multi_gpu_config_path):
+        try:
+            run_command(f"sed -i 's/remote_data_path: \"tokenized_data\"/remote_data_path: \"{DATA_REMOTE_PATH}\"/' {multi_gpu_config_path}")
+            print("Updated h100_multi_gpu.yaml with correct data path")
+        except:
+            print("Could not update h100_multi_gpu.yaml")
+
 def download_training_data():
     print(f"\n--- Downloading training data (first {NUM_FILES_TO_DOWNLOAD} files) ---")
     os.makedirs(SHARDS_DIR, exist_ok=True)
     
     try:
-        # Try to list bucket contents first to check availability
-        run_command(f"{PYTHON_EXECUTABLE} {MODEL_TRAINING_DIR}/download_data.py --bucket {DATA_DOWNLOAD_BUCKET} --remote_path tokenized_data --list-only")
+        # First test bucket access and list files
+        print(f"Testing access to bucket: {DATA_DOWNLOAD_BUCKET}")
         
-        # Download training data
-        cmd = f"{PYTHON_EXECUTABLE} {MODEL_TRAINING_DIR}/download_data.py --bucket {DATA_DOWNLOAD_BUCKET} --remote_path tokenized_data --local_dir {SHARDS_DIR} --max_files {NUM_FILES_TO_DOWNLOAD} --workers 8"
-        run_command(cmd)
+        test_script = f"""
+import sys
+from google.cloud import storage
+
+def test_bucket_access(bucket_name="{DATA_DOWNLOAD_BUCKET}"):
+    try:
+        # Create anonymous client for public bucket
+        client = storage.Client.create_anonymous_client()
+        bucket = client.bucket(bucket_name)
+        
+        # List top-level files/directories
+        print(f"Listing files in gs://{bucket_name}/")
+        blobs = list(bucket.list_blobs(max_results=10))
+        
+        if not blobs:
+            print(f"Warning: No files found in bucket {bucket_name}")
+            return False
+            
+        print(f"Found {len(blobs)} files in bucket. Sample files:")
+        for blob in blobs[:5]:
+            print(f" - {blob.name} ({blob.size/1024/1024:.2f} MB)")
+            
+        # Count .npz files
+        npz_files = [b for b in bucket.list_blobs() if b.name.endswith('.npz')]
+        print(f"Found {len(npz_files)} .npz files in the bucket")
+        
+        # List a few .npz files
+        if npz_files:
+            print("Sample .npz files:")
+            for blob in npz_files[:5]:
+                print(f" - {blob.name} ({blob.size/1024/1024:.2f} MB)")
+        
+        return True
     except Exception as e:
-        print(f"Error downloading training data: {e}")
+        print(f"Error accessing bucket: {e}")
+        return False
+
+if not test_bucket_access():
+    sys.exit(1)
+"""
+        
+        # Run the test script
+        try:
+            with open("test_bucket_access.py", "w") as f:
+                f.write(test_script)
+            
+            run_command(f"{PYTHON_EXECUTABLE} test_bucket_access.py")
+            print("✅ Bucket access test passed")
+        except Exception as e:
+            print(f"❌ Bucket access test failed: {e}")
+            print("This may indicate issues with the bucket name or permissions")
+            return
+        
+        # Check if download_data.py script exists
+        download_script_path = os.path.join(MODEL_TRAINING_DIR, "download_data.py")
+        if not os.path.exists(download_script_path):
+            print(f"Error: {download_script_path} not found")
+            return
+        
+        # Try to download data with proper path
+        cmd = f"{PYTHON_EXECUTABLE} {download_script_path} --bucket {DATA_DOWNLOAD_BUCKET}"
+        if DATA_REMOTE_PATH:
+            cmd += f" --remote_path {DATA_REMOTE_PATH}"
+        cmd += f" --local_dir {SHARDS_DIR} --max_files {NUM_FILES_TO_DOWNLOAD} --workers 8"
+        
+        print(f"Downloading data with command: {cmd}")
+        try:
+            run_command(cmd)
+        except Exception as e:
+            print(f"Error downloading data: {e}")
+            print("Waiting 5 seconds and trying again...")
+            time.sleep(5)
+            run_command(cmd)
+        
+        # Check if files were downloaded
+        npz_files = list(Path(SHARDS_DIR).glob("*.npz"))
+        if npz_files:
+            print(f"\n✅ Found {len(npz_files)} .npz files in {SHARDS_DIR}")
+            # Check file sizes
+            total_size_mb = sum(f.stat().st_size for f in npz_files) / (1024 * 1024)
+            print(f"Total data size: {total_size_mb:.2f} MB")
+            
+            # Verify file integrity
+            print("Verifying file integrity...")
+            try:
+                import numpy as np
+                sample_file = npz_files[0]
+                data = np.load(sample_file)
+                keys = list(data.keys())
+                print(f"Sample file contains keys: {keys}")
+                
+                # Check for expected keys
+                expected_keys = ["input_ids", "arr_0", "sequences", "text"]
+                found_keys = [key for key in expected_keys if key in keys]
+                if found_keys:
+                    key = found_keys[0]
+                    shape = data[key].shape
+                    print(f"✅ Data verification successful. Shape for '{key}': {shape}")
+                else:
+                    print(f"⚠️ Warning: None of the expected keys {expected_keys} found")
+            except Exception as e:
+                print(f"⚠️ Warning: Could not verify file contents: {e}")
+        else:
+            print(f"\n❌ No .npz files found in {SHARDS_DIR}. Download may have failed.")
+            print("Please check bucket name, path, and permissions.")
+            
+            # Try to list local directory
+            run_command(f"ls -la {SHARDS_DIR}")
+    except Exception as e:
+        print(f"Error in data download process: {e}")
         print("Please check the bucket name and permissions")
 
 def start_tensorboard():
@@ -183,15 +309,18 @@ def main():
     # 3. Create Model Directories and Config Files
     create_model_directory()
     
-    # 4. Install Python Dependencies
+    # 4. Update Configuration Files
+    update_configuration_files()
+    
+    # 5. Install Python Dependencies
     # Make sure to `cd` into the repo if requirements.txt is to be used from there
     os.chdir(MODEL_TRAINING_DIR) # Important for relative paths in config if any
     install_python_dependencies()
     
-    # 5. Download Training Data
+    # 6. Download Training Data
     download_training_data()
     
-    # 6. Start TensorBoard
+    # 7. Start TensorBoard
     start_tensorboard()
     
     print("\n🎉 Setup Complete! You should be ready to start training. 🎉")
@@ -199,7 +328,7 @@ def main():
     print(f"1. Navigate to the training directory: cd {MODEL_TRAINING_DIR}")
     print("2. Run a quick test: bash h100_runner.sh test")
     print("3. Start full training: bash h100_runner.sh full")
-    print(f"4. Monitor on TensorBoard at http://illegal-primrose-mastodon-6006.1.cricket.hyperbolic.xyz:30000")
+    print(f"4. Monitor on TensorBoard at port {TENSORBOARD_PORT}")
 
 if __name__ == "__main__":
     main() 

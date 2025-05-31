@@ -24,8 +24,9 @@ logger = logging.getLogger(__name__)
 def download_blob(bucket, blob, local_dir):
     """Download a single blob from GCS to local storage"""
     try:
-        # Get relative path from remote_path
-        local_file_path = Path(local_dir) / blob.name.split("/")[-1]
+        # Extract just the filename without any path
+        filename = os.path.basename(blob.name)
+        local_file_path = Path(local_dir) / filename
         
         # Skip if file exists and has same size
         if local_file_path.exists():
@@ -51,6 +52,27 @@ def list_all_blobs(bucket, max_results=100):
     all_blobs = list(bucket.list_blobs(max_results=max_results))
     return all_blobs
 
+def list_all_files(bucket, max_files=50):
+    """List all files in the bucket with details"""
+    all_files = []
+    all_npz_files = []
+    
+    for blob in bucket.list_blobs():
+        file_info = {
+            'name': blob.name,
+            'size_mb': blob.size / (1024 * 1024),
+            'updated': blob.updated
+        }
+        all_files.append(file_info)
+        
+        if blob.name.endswith('.npz'):
+            all_npz_files.append(file_info)
+            
+        if len(all_files) >= max_files:
+            break
+    
+    return all_files, all_npz_files
+
 def download_data(bucket_name, remote_path, local_dir, max_workers=8, max_files=None, anonymous=True, list_only=False):
     """Download training data from GCS with parallel downloads"""
     try:
@@ -68,69 +90,65 @@ def download_data(bucket_name, remote_path, local_dir, max_workers=8, max_files=
         bucket = client.bucket(bucket_name)
         
         # First, check if bucket exists by listing all blobs
-        logger.info("Scanning entire bucket contents to identify data location...")
-        all_blobs = list_all_blobs(bucket)
+        logger.info(f"Testing connection to bucket: {bucket_name}")
+        try:
+            # Just get a few blobs to confirm bucket exists and is accessible
+            test_blobs = list(bucket.list_blobs(max_results=5))
+            if not test_blobs:
+                logger.warning(f"Bucket {bucket_name} appears to be empty or not accessible")
+            else:
+                logger.info(f"Successfully connected to bucket {bucket_name}")
+                logger.info(f"First few files: {[b.name for b in test_blobs]}")
+        except Exception as e:
+            logger.error(f"Error accessing bucket {bucket_name}: {e}")
+            return False
+
+        # List all files (with limit) and NPZ files specifically
+        logger.info(f"Scanning for all files and .npz files in the bucket...")
+        all_files, all_npz_files = list_all_files(bucket, max_files=500)
         
-        if not all_blobs:
-            logger.error(f"No files found in bucket: {bucket_name}. Bucket may be empty or not accessible.")
+        logger.info(f"Found {len(all_files)} total files in bucket, {len(all_npz_files)} are .npz files")
+        
+        if all_npz_files:
+            logger.info("Sample .npz files:")
+            for file_info in all_npz_files[:5]:
+                logger.info(f" - {file_info['name']} ({file_info['size_mb']:.2f} MB)")
+            
+        # If remote_path is specified, filter by it
+        npz_blobs = []
+        if remote_path:
+            logger.info(f"Filtering by remote path: gs://{bucket_name}/{remote_path}")
+            prefix_str = remote_path if remote_path else "(root)"
+            blobs = list(bucket.list_blobs(prefix=remote_path))
+            logger.info(f"Found {len(blobs)} total files in gs://{bucket_name}/{prefix_str}")
+            npz_blobs = [b for b in blobs if b.name.endswith('.npz')]
+        else:
+            # If no remote_path, use all .npz files
+            logger.info(f"No remote path specified, using all .npz files in the bucket")
+            npz_blobs = [bucket.blob(f['name']) for f in all_npz_files]
+        
+        if not npz_blobs:
+            logger.warning(f"No .npz files found matching the criteria")
+            # Try to get some sample file names to help diagnose the issue
+            if all_files:
+                logger.info(f"Sample non-npz files found: {[f['name'] for f in all_files[:5]]}")
+            
+            # Suggest trying without a path prefix
+            if remote_path:
+                logger.info("Try downloading without a remote_path (root of bucket)")
+                
             return False
         
-        # Group files by directory to identify potential data locations
-        directories = {}
-        for blob in all_blobs:
-            parts = blob.name.split('/')
-            if len(parts) > 1:
-                directory = parts[0]
-                if directory not in directories:
-                    directories[directory] = []
-                directories[directory].append(blob.name)
-        
-        # Log all potential data directories
-        logger.info(f"Found {len(directories)} potential data directories:")
-        for directory, files in directories.items():
-            npz_count = sum(1 for f in files if f.endswith('.npz'))
-            logger.info(f"  - {directory}/: {len(files)} files ({npz_count} .npz files)")
-        
-        # Suggest a different remote path if no files found in specified path
-        if remote_path:
-            matching_dirs = [d for d in directories.keys() if remote_path in d or d in remote_path]
-            if matching_dirs:
-                logger.info(f"Suggested alternatives to '{remote_path}':")
-                for d in matching_dirs:
-                    logger.info(f"  - {d}/")
-        
-        # If list_only, stop here
-        if list_only:
-            logger.info("List-only mode. Skipping download.")
-            return True
-        
-        # Continue with normal flow - list blobs with the given prefix
-        logger.info(f"Listing files in gs://{bucket_name}/{remote_path}")
-        blobs = list(bucket.list_blobs(prefix=remote_path))
-        
-        # Filter for .npz files
-        npz_blobs = [b for b in blobs if b.name.endswith('.npz')]
-        
-        # If no files found, try to list available prefixes
-        if not npz_blobs:
-            logger.warning(f"No .npz files found in gs://{bucket_name}/{remote_path}")
-            logger.info("Checking available top-level directories in the bucket...")
-            try:
-                prefixes = list_bucket_prefixes(bucket)
-                if prefixes:
-                    logger.info(f"Available prefixes in the bucket: {prefixes}")
-                    logger.info("Try using one of these prefixes with the --remote_path argument")
-                else:
-                    logger.info("No prefixes found in the bucket")
-            except Exception as e:
-                logger.error(f"Error listing bucket prefixes: {e}")
-        
-        if max_files:
+        if max_files and npz_blobs:
             npz_blobs = npz_blobs[:max_files]
             logger.info(f"Limited to {max_files} files")
         
         logger.info(f"Found {len(npz_blobs)} .npz files to download")
         
+        if list_only:
+            logger.info("List-only mode. Skipping download.")
+            return True
+            
         if not npz_blobs:
             return False
         
@@ -147,7 +165,21 @@ def download_data(bucket_name, remote_path, local_dir, max_workers=8, max_files=
         
         if success_count > 0:
             logger.info(f"Downloaded {success_count}/{len(npz_blobs)} files in {duration:.1f}s")
-            logger.info(f"Average speed: {sum([b.size for b in npz_blobs]) / (1024 * 1024 * duration):.2f} MB/s")
+            total_size_mb = sum([b.size for b in npz_blobs]) / (1024 * 1024)
+            logger.info(f"Total data downloaded: {total_size_mb:.2f} MB")
+            logger.info(f"Average speed: {total_size_mb / duration:.2f} MB/s")
+            
+            # Verify a sample file if available
+            try:
+                import numpy as np
+                sample_files = list(Path(local_dir).glob("*.npz"))
+                if sample_files:
+                    sample_file = sample_files[0]
+                    data = np.load(sample_file)
+                    keys = list(data.keys())
+                    logger.info(f"Sample file {sample_file.name} contains keys: {keys}")
+            except Exception as e:
+                logger.warning(f"Could not verify sample file contents: {e}")
         
         return success_count > 0
     

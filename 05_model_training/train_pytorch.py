@@ -139,15 +139,15 @@ class ModelTrainer:
     
     def setup_data(self):
         """Setup data loading and GCS synchronization"""
-        data_config = self.config['data']
+        data_config = self.config.get('data', {})
         
-        # Initialize GCS data manager
+        # Initialize GCS data manager with more robust key handling
         self.gcs_manager = GCSDataManager(
-            bucket_name=data_config['remote_data_bucket'],
-            remote_path=data_config['remote_data_path'],
-            local_path=data_config['local_data_dir'],
+            bucket_name=data_config.get('bucket_name', data_config.get('remote_data_bucket', 'refocused-ai')),
+            remote_path=data_config.get('remote_data_path', ''),
+            local_path=data_config.get('local_dir', data_config.get('local_data_dir', '/home/ubuntu/training_data/shards')),
             use_gcs=data_config.get('use_gcs', True),
-            gcs_client_type=data_config.get('gcs_client_type', 'default')
+            gcs_client_type=data_config.get('gcs_client_type', 'anonymous')
         )
 
         # Sync data from GCS to local storage if GCS is enabled
@@ -161,13 +161,14 @@ class ModelTrainer:
         else:
             logger.info("GCS usage is disabled. Skipping data sync from GCS.")
             
-        # Create data loader
+        # Create data loader with more robust key handling
         self.train_dataloader = create_dataloader(
-            data_dir=data_config['local_data_dir'],
-            batch_size=self.config['training']['per_device_train_batch_size'],
-            sequence_length=data_config['max_seq_length'],
-            num_workers=self.config['training']['dataloader_num_workers'],
-            prefetch_factor=self.config['training']['dataloader_prefetch_factor'],
+            data_dir=data_config.get('local_dir', data_config.get('local_data_dir', '/home/ubuntu/training_data/shards')),
+            batch_size=self.config.get('training', {}).get('per_device_train_batch_size', 
+                       self.config.get('training', {}).get('batch_size', 4)),
+            sequence_length=data_config.get('max_seq_length', 1024),
+            num_workers=self.config.get('training', {}).get('dataloader_num_workers', 2),
+            prefetch_factor=self.config.get('training', {}).get('dataloader_prefetch_factor', 2),
             npz_key_priority=data_config.get('npz_key_priority', ['input_ids', 'arr_0', 'text', 'sequences'])
         )
         

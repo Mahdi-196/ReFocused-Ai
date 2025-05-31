@@ -47,8 +47,10 @@ def create_test_config(output_dir="test_output"):
             "path": "../models/tokenizer/tokenizer"
         },
         "data": {
+            "bucket_name": "refocused-ai",
+            "remote_data_path": "",
+            "local_dir": "/home/ubuntu/training_data/shards",
             "use_gcs": False,
-            "local_data_dir": "/home/ubuntu/training_data/shards",
             "max_seq_length": 1024,
             "dataloader_num_workers": 2,
             "dataloader_prefetch_factor": 2,
@@ -57,6 +59,7 @@ def create_test_config(output_dir="test_output"):
         "training": {
             "output_dir": output_dir,
             "per_device_train_batch_size": 2,
+            "batch_size": 2,
             "gradient_accumulation_steps": 8,
             "learning_rate": 3e-4,
             "weight_decay": 0.01,
@@ -67,7 +70,9 @@ def create_test_config(output_dir="test_output"):
             "logging_steps": 1,
             "fp16": False,
             "bf16": True,
-            "gradient_checkpointing": True
+            "gradient_checkpointing": True,
+            "dataloader_num_workers": 2,
+            "dataloader_prefetch_factor": 2
         },
         "checkpointing": {
             "output_dir": f"{output_dir}/checkpoints",
@@ -80,7 +85,10 @@ def create_test_config(output_dir="test_output"):
             "logging_dir": f"{output_dir}/logs",
             "log_steps": 1,
             "monitor_gpu_memory": False,
-            "monitor_system_metrics": False
+            "monitor_system_metrics": False,
+            "wandb_project": "refocused-ai-h100-test",
+            "wandb_entity": None,
+            "report_to": ["tensorboard"]
         },
         "hardware": {
             "num_gpus": 1,
@@ -130,7 +138,7 @@ def main():
     config = create_test_config(args.output_dir)
     
     # Update data directory
-    config["data"]["local_data_dir"] = args.data_dir
+    config["data"]["local_dir"] = args.data_dir
     
     # Prepare test data
     prepare_test_data(args.data_dir, args.num_files)
