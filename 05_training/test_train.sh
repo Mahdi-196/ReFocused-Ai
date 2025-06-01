@@ -18,37 +18,27 @@ echo "Creating test data directory: $DATA_DIR"
 rm -rf $DATA_DIR
 mkdir -p $DATA_DIR
 
-# 3. Download first 25 tokenized files from GCS
-echo "Downloading first 25 tokenized files from gs://refocused-ai/..."
-
-# First, check if gsutil is available
-if ! command -v gsutil &> /dev/null; then
-    echo "ERROR: gsutil not found. Install Google Cloud SDK first."
+# 3. Copy first 25 tokenized files from local root folder
+echo "Copying first 25 tokenized files from ../ ..."
+LOCAL_SRC=".."
+if [ ! -d "$LOCAL_SRC" ]; then
+    echo "ERROR: Local folder '$LOCAL_SRC' not found."
     exit 1
 fi
 
-# Download files with error handling
-echo "Listing available files..."
-gsutil ls "gs://refocused-ai/shard_*.npz" > /tmp/available_files.txt 2>/dev/null || {
-    echo "ERROR: Failed to list files from GCS. Check your credentials and bucket access."
-    exit 1
-}
-
-# Download first 25 files
-head -n 25 /tmp/available_files.txt | while read -r file; do
-    echo "Downloading: $file"
-    gsutil cp "$file" "$DATA_DIR/" || {
-        echo "WARNING: Failed to download $file. Continuing..."
+ls "$LOCAL_SRC"/*.npz 2>/dev/null | head -n 25 | while read -r file; do
+    echo "Copying: $file"
+    cp "$file" "$DATA_DIR/" || {
+        echo "WARNING: failed to copy $file; continuing..."
     }
 done
 
-# Verify we have files
-FILE_COUNT=$(ls $DATA_DIR/*.npz 2>/dev/null | wc -l)
+FILE_COUNT=$(ls "$DATA_DIR"/*.npz 2>/dev/null | wc -l)
 if [ "$FILE_COUNT" -eq 0 ]; then
-    echo "ERROR: No .npz files downloaded. Check GCS access and bucket contents."
+    echo "ERROR: No .npz files found in '$DATA_DIR/'."
     exit 1
 fi
-echo "✓ Downloaded $FILE_COUNT files successfully"
+echo "✓ Copied $FILE_COUNT files successfully"
 
 # 4. Set up environment variables
 echo "Setting up environment variables..."
@@ -60,16 +50,12 @@ if [ -f ".env" ]; then
     source .env
     set +a
 else
-    echo "WARNING: No .env file found. Make sure GOOGLE_APPLICATION_CREDENTIALS is set."
-fi
-
-# Verify Google credentials
-if [ -z "$GOOGLE_APPLICATION_CREDENTIALS" ]; then
-    echo "WARNING: GOOGLE_APPLICATION_CREDENTIALS not set. GCS uploads may fail."
+    echo "WARNING: No .env file found. If you don't need GCS credentials, you can ignore this."
 fi
 
 # 5. Set CUDA device (single GPU for test)
-export CUDA_VISIBLE_DEVICES=0
+# Use CUDA device specified by ENV var, or default to 0
+export CUDA_VISIBLE_DEVICES="${TEST_GPU:-0}"
 echo "Using CUDA device: $CUDA_VISIBLE_DEVICES"
 
 # 6. Create logs directory
@@ -101,10 +87,9 @@ if [ $? -eq 0 ]; then
     echo "Results:"
     echo "- Logs: $LOG_DIR"
     echo "- TensorBoard: tensorboard --logdir=$LOG_DIR"
-    echo "- Checkpoints: gs://refocused-ai/Checkpoints/"
+    echo "- Checkpoints (local): $(pwd)/checkpoints/"
     echo ""
-    echo "To view uploaded checkpoints:"
-    echo "gsutil ls -r gs://refocused-ai/Checkpoints/"
+    echo "Make sure to save or inspect local checkpoints in the checkpoints directory"
     echo "==================================="
 else
     echo ""

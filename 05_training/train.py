@@ -79,12 +79,14 @@ try:
 except ImportError:
     sys.exit("ERROR: DeepSpeed not installed. Run setup_env.sh first.")
 
-# 8. Google Cloud Storage
+# 8. Google Cloud Storage (optional)
+GCS_AVAILABLE = False
 try:
     from google.cloud import storage
     from google.api_core import retry
+    GCS_AVAILABLE = True
 except ImportError:
-    sys.exit("ERROR: google-cloud-storage not installed.")
+    print("INFO: google-cloud-storage not installed. Local storage will be used for checkpoints.")
 
 # 9. Other utilities
 try:
@@ -392,7 +394,6 @@ class GPTTrainer:
         self.setup_model()
         self.setup_tokenizer()
         self.setup_data()
-        self.setup_gcs()
         self.setup_logging_tools()
         
         # Training state
@@ -479,17 +480,6 @@ class GPTTrainer:
         )
         
         self.data_files = data_files
-        
-    def setup_gcs(self):
-        """Setup Google Cloud Storage"""
-        try:
-            self.storage_client = storage.Client()
-            self.gcs_bucket = self.storage_client.bucket("refocused-ai")
-            if self.is_main_process:
-                self.logger.info("✓ Connected to GCS bucket: refocused-ai")
-        except Exception as e:
-            self.logger.warning(f"GCS setup failed: {e}. Checkpointing may not work.")
-            self.gcs_bucket = None
     
     def setup_logging_tools(self):
         """Setup TensorBoard and W&B"""
@@ -507,7 +497,7 @@ class GPTTrainer:
                 self.logger.info(f"✓ W&B initialized: {self.args.wandb_project}")
     
     def save_checkpoint(self, step: int, files_processed: int):
-        """Save checkpoint and upload to GCS"""
+        """Save checkpoint locally"""
         if not self.is_main_process:
             return
         
@@ -532,28 +522,7 @@ class GPTTrainer:
             with open(ckpt_dir / "metadata.json", "w") as f:
                 json.dump(metadata, f, indent=2)
             
-            # Upload to GCS with retries
-            if self.gcs_bucket:
-                @retry.Retry(predicate=retry.if_exception_type(Exception))
-                def upload_file(local_path, gcs_path):
-                    blob = self.gcs_bucket.blob(gcs_path)
-                    blob.upload_from_filename(str(local_path))
-                
-                # Upload all checkpoint files
-                for file_path in ckpt_dir.rglob("*"):
-                    if file_path.is_file():
-                        relative_path = file_path.relative_to(ckpt_dir)
-                        gcs_path = f"Checkpoints/{ckpt_name}/{relative_path}"
-                        
-                        try:
-                            upload_file(file_path, gcs_path)
-                        except Exception as e:
-                            self.logger.warning(f"Failed to upload {file_path}: {e}")
-                
-                self.logger.info(f"✓ Checkpoint uploaded to GCS: {ckpt_name}")
-                
-                # Clean up local checkpoint to save space
-                shutil.rmtree(ckpt_dir)
+            self.logger.info(f"✓ Checkpoint saved to: {ckpt_dir}")
                 
         except Exception as e:
             self.logger.error(f"Checkpoint save failed: {e}")

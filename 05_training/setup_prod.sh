@@ -17,9 +17,10 @@ DATA_DIR="data_full"
 echo "Creating production data directory: $DATA_DIR"
 mkdir -p $DATA_DIR
 
-# 3. Check if gsutil is available
-if ! command -v gsutil &> /dev/null; then
-    echo "ERROR: gsutil not found. Install Google Cloud SDK first."
+# 3. Check local source directory
+LOCAL_SRC=".."
+if [ ! -d "$LOCAL_SRC" ]; then
+    echo "ERROR: Local folder '$LOCAL_SRC' not found."
     exit 1
 fi
 
@@ -30,7 +31,7 @@ if [ -f ".env" ]; then
     source .env
     set +a
 else
-    echo "WARNING: No .env file found. Make sure GOOGLE_APPLICATION_CREDENTIALS is set."
+    echo "INFO: No .env file found. Continuing without it."
 fi
 
 # 5. Check available space
@@ -47,77 +48,69 @@ if [ "$AVAILABLE_SPACE" -lt 100 ]; then
     fi
 fi
 
-# 6. Count files to download
-echo "Counting files in gs://refocused-ai/..."
-TOTAL_FILES=$(gsutil ls "gs://refocused-ai/*.npz" 2>/dev/null | wc -l) || {
-    echo "ERROR: Failed to list files from GCS. Check your credentials and bucket access."
-    exit 1
-}
-
+# 6. Count files to copy
+echo "Counting files in $LOCAL_SRC..."
+TOTAL_FILES=$(ls "$LOCAL_SRC"/*.npz 2>/dev/null | wc -l) 
 if [ "$TOTAL_FILES" -eq 0 ]; then
-    echo "ERROR: No tokenized files found in gs://refocused-ai/"
+    echo "ERROR: No tokenized files found in $LOCAL_SRC"
     exit 1
 fi
 
-echo "Found $TOTAL_FILES tokenized files to download."
+echo "Found $TOTAL_FILES tokenized files to copy."
 echo "This represents approximately 21-22 billion tokens."
 
-# 7. Estimate download size and time
+# 7. Estimate copy size
 echo ""
-echo "Estimating download size..."
-# Get size of first few files to estimate
-SAMPLE_SIZE=$(gsutil du -s "gs://refocused-ai/*.npz" 2>/dev/null | head -5 | awk '{sum+=$1} END {print sum/5/1024/1024/1024}') || SAMPLE_SIZE=1
-ESTIMATED_TOTAL_SIZE=$(echo "$SAMPLE_SIZE * $TOTAL_FILES" | bc -l | xargs printf "%.1f")
-echo "Estimated total size: ${ESTIMATED_TOTAL_SIZE}GB"
+echo "Estimating disk space required..."
+TOTAL_SIZE=$(du -sh "$LOCAL_SRC"/*.npz 2>/dev/null | awk '{sum+=$1} END {print sum}')
+echo "Estimated total size: ${TOTAL_SIZE}"
 
-# 8. Confirm download
+# 8. Confirm copy
 echo ""
 echo "==================================="
-echo "Ready to download:"
+echo "Ready to copy files:"
 echo "- Files: $TOTAL_FILES"
-echo "- Estimated size: ${ESTIMATED_TOTAL_SIZE}GB"
+echo "- Estimated size: ${TOTAL_SIZE}"
+echo "- Source: $LOCAL_SRC"
 echo "- Destination: $DATA_DIR"
 echo "==================================="
-read -p "Proceed with download? (y/N) " -n 1 -r
+read -p "Proceed with copy? (y/N) " -n 1 -r
 echo
 
 if [[ ! $REPLY =~ ^[Yy]$ ]]; then
-    echo "Download cancelled."
+    echo "Copy cancelled."
     exit 0
 fi
 
-# 9. Download all tokenized files with parallel transfers
+# 9. Copy all tokenized files
 echo ""
-echo "Starting parallel download (using gsutil -m for multi-threading)..."
-echo "This may take a while depending on your connection speed..."
+echo "Starting file copy..."
+echo "This may take a while depending on your disk speed..."
 
 START_TIME=$(date +%s)
 
-# Use gsutil with multi-threading and retry
-gsutil -m cp -r "gs://refocused-ai/*.npz" "$DATA_DIR/" || {
-    echo "ERROR: Download failed. Attempting retry..."
-    # Retry with resumable uploads
-    gsutil -m cp -c -r "gs://refocused-ai/*.npz" "$DATA_DIR/" || {
-        echo "ERROR: Download failed after retry."
-        exit 1
-    }
+# Use cp with wildcard
+echo "Copying files from $LOCAL_SRC to $DATA_DIR..."
+cp "$LOCAL_SRC"/*.npz "$DATA_DIR/" || {
+    echo "ERROR: Copy failed."
+    exit 1
 }
 
 END_TIME=$(date +%s)
 DURATION=$((END_TIME - START_TIME))
 DURATION_MIN=$((DURATION / 60))
 
-# 10. Verify download
+# 10. Verify copy
 echo ""
-echo "Verifying downloaded files..."
-DOWNLOADED_COUNT=$(ls $DATA_DIR/*.npz 2>/dev/null | wc -l)
-TOTAL_SIZE=$(du -sh $DATA_DIR | cut -f1)
+echo "Verifying copied files..."
+COPIED_COUNT=$(ls $DATA_DIR/*.npz 2>/dev/null | wc -l)
+COPIED_SIZE=$(du -sh $DATA_DIR | cut -f1)
 
-if [ "$DOWNLOADED_COUNT" -ne "$TOTAL_FILES" ]; then
-    echo "WARNING: Downloaded $DOWNLOADED_COUNT files, expected $TOTAL_FILES"
-    echo "Some files may have failed to download."
+if [ "$COPIED_COUNT" -ne "$TOTAL_FILES" ]; then
+    echo "WARNING: Copied $COPIED_COUNT files, expected $TOTAL_FILES"
+    echo "Some files may have failed to copy."
 else
-    echo "✓ Successfully downloaded all $DOWNLOADED_COUNT files"
+    echo "✓ Successfully copied all $COPIED_COUNT files"
 fi
 
 # 11. Create file manifest
@@ -131,9 +124,9 @@ echo "==================================="
 echo "✅ Production data setup complete!"
 echo ""
 echo "Summary:"
-echo "- Downloaded files: $DOWNLOADED_COUNT"
-echo "- Total size: $TOTAL_SIZE"
-echo "- Download time: $DURATION_MIN minutes"
+echo "- Copied files: $COPIED_COUNT"
+echo "- Total size: $COPIED_SIZE"
+echo "- Copy time: $DURATION_MIN minutes"
 echo "- Data directory: $DATA_DIR"
 echo ""
 echo "Next steps:"

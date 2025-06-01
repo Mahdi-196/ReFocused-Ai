@@ -17,7 +17,7 @@ fi
 DATA_DIR="data_full"
 if [ ! -d "$DATA_DIR" ] || [ -z "$(ls $DATA_DIR/*.npz 2>/dev/null)" ]; then
   echo "ERROR: $DATA_DIR is empty or doesn't exist."
-  echo "Run setup_prod.sh first to download the training data."
+  echo "Run setup_prod.sh first to prepare the training data."
   exit 1
 fi
 
@@ -30,6 +30,8 @@ if [ -f ".env" ]; then
     set -a
     source .env
     set +a
+else
+    echo "INFO: No .env file found. Continuing without it."
 fi
 
 # 4. Set up distributed training environment
@@ -181,8 +183,8 @@ echo ""
 echo "Stop training:"
 echo "- kill $TRAIN_PID"
 echo ""
-echo "Checkpoints will be uploaded to:"
-echo "- gs://refocused-ai/Checkpoints/"
+echo "Checkpoints will be saved to:"
+echo "- $(pwd)/$CHECKPOINT_DIR"
 echo "==================================="
 
 # Optional: Wait for training to complete
