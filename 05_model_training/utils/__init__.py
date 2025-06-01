@@ -6,6 +6,7 @@ from .data_utils import GCSDataLoader, TokenizedDataset, create_dataloader
 from .checkpoint_utils import CheckpointManager
 from .training_utils import (
     MetricsTracker, 
+    EnhancedMetricsTracker,
     get_grad_norm, 
     compute_perplexity,
     estimate_remaining_time,
@@ -19,6 +20,7 @@ __all__ = [
     'create_dataloader',
     'CheckpointManager',
     'MetricsTracker',
+    'EnhancedMetricsTracker',
     'get_grad_norm',
     'compute_perplexity',
     'estimate_remaining_time',

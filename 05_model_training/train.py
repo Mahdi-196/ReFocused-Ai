@@ -188,11 +188,7 @@ def main():
     )
     
     # Create optimized dataloader
-    train_dataloader, num_files = create_dataloader(
-        config, 
-        accelerator, 
-        use_optimized=config.use_optimized_dataset
-    )
+    train_dataloader, num_files = create_dataloader(config, accelerator)
     
     # Calculate training steps with test mode limitations
     num_update_steps_per_epoch = len(train_dataloader) // config.gradient_accumulation_steps
