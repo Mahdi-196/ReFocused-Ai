@@ -4,25 +4,33 @@ Data utilities for loading tokenized data from Google Cloud Storage
 
 import numpy as np
 from google.cloud import storage
-from typing import List, Optional, Iterator
+from typing import List, Optional, Iterator, Dict
 import os
 from tqdm import tqdm
 import torch
 from torch.utils.data import Dataset, DataLoader
 import random
+import pickle
+import hashlib
+import json
 
 
 class GCSDataLoader:
-    """Handles loading tokenized data from Google Cloud Storage"""
+    """Handles loading tokenized data from Google Cloud Storage with preprocessing cache"""
     
-    def __init__(self, bucket_name: str, cache_dir: str = "./cache"):
+    def __init__(self, bucket_name: str, cache_dir: str = "./cache", preprocess_cache_dir: str = "./preprocessed_cache"):
         self.bucket_name = bucket_name
         self.cache_dir = cache_dir
+        self.preprocess_cache_dir = preprocess_cache_dir
         os.makedirs(cache_dir, exist_ok=True)
+        os.makedirs(preprocess_cache_dir, exist_ok=True)
         
         # Initialize GCS client
         self.client = storage.Client.create_anonymous_client()
         self.bucket = self.client.bucket(bucket_name)
+        
+        # Cache for flattened data to avoid repeated processing
+        self.flattened_cache = {}
     
     def list_data_files(self, prefix: str = "", max_files: Optional[int] = None) -> List[str]:
         """List all tokenized .npz files in the bucket"""
@@ -51,6 +59,38 @@ class GCSDataLoader:
         
         return local_path
     
+    def get_preprocessed_cache_path(self, file_path: str) -> str:
+        """Generate cache path for preprocessed data"""
+        # Create a hash of the file path for consistent naming
+        file_hash = hashlib.md5(file_path.encode()).hexdigest()[:12]
+        filename = f"preprocessed_{os.path.basename(file_path).replace('.npz', '')}_{file_hash}.pkl"
+        return os.path.join(self.preprocess_cache_dir, filename)
+    
+    def load_npz_file_optimized(self, file_path: str, max_length: int = 2048, stride: int = 2048) -> Dict:
+        """Load and preprocess tokenized data with caching to avoid repeated flattening"""
+        
+        # Check if file is already in memory cache
+        if file_path in self.flattened_cache:
+            return self.flattened_cache[file_path]
+        
+        # Check for preprocessed cache on disk
+        cache_path = self.get_preprocessed_cache_path(file_path)
+        
+        if os.path.exists(cache_path):
+            try:
+                with open(cache_path, 'rb') as f:
+                    cached_data = pickle.load(f)
+                    # Verify cache is still valid (check max_length and stride)
+                    if (cached_data.get('max_length') == max_length and 
+                        cached_data.get('stride') == stride):
+                        self.flattened_cache[file_path] = cached_data
+                        return cached_data
+            except:
+                # If cache is corrupted, remove it and reprocess
+                os.remove(cache_path)
+        
+        # Load and preprocess the file
+        print(f"Preprocessing {os.path.basename(file_path)}...")
     def load_npz_file(self, file_path: str) -> np.ndarray:
         """Load tokenized data from npz file"""
         data = np.load(file_path)

@@ -20,6 +20,7 @@ from torch.distributed.fsdp.wrap import transformer_auto_wrap_policy
 import argparse
 from tqdm import tqdm
 import math
+import time
 
 # Add project root to path
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -28,7 +29,7 @@ from configs import get_model_config, get_test_config, get_production_config
 from utils import (
     create_dataloader,
     CheckpointManager,
-    MetricsTracker,
+    EnhancedMetricsTracker,
     get_grad_norm,
     compute_perplexity,
     count_parameters,
@@ -89,6 +90,10 @@ def main():
                        help="Resume from checkpoint")
     parser.add_argument("--seed", type=int, default=42, 
                        help="Random seed")
+    parser.add_argument("--profile", action="store_true", 
+                       help="Enable performance profiling")
+    parser.add_argument("--max-steps", type=int, default=None,
+                       help="Override max steps for testing")
     args = parser.parse_args()
     
     # Set seed for reproducibility
@@ -97,10 +102,18 @@ def main():
     # Get configuration based on mode
     if args.mode == "test":
         config = get_test_config()
-        print("Running TEST training with 25 files...")
+        print("Running TEST training with optimized preprocessing...")
     else:
         config = get_production_config()
         print("Running PRODUCTION training on full dataset...")
+    
+    # Override configuration with command line arguments
+    if args.profile:
+        config.enable_profiling = True
+        config.detailed_monitoring = True
+    
+    if args.max_steps is not None:
+        config.max_test_steps = args.max_steps
     
     # Initialize FSDP plugin
     fsdp_plugin = setup_fsdp_plugin()
@@ -121,14 +134,29 @@ def main():
         print(f"Distributed: {accelerator.distributed_type}")
         print(f"Num processes: {accelerator.num_processes}")
         print(f"Mixed precision: {accelerator.mixed_precision}")
+        print(f"Optimizations enabled:")
+        print(f"  - Optimized dataset: {config.use_optimized_dataset}")
+        print(f"  - Profiling: {config.enable_profiling}")
+        print(f"  - Detailed monitoring: {config.detailed_monitoring}")
+        if args.mode == "test":
+            print(f"  - Max test steps: {config.max_test_steps}")
     
     # Setup directories
     os.makedirs(config.output_dir, exist_ok=True)
     os.makedirs(config.logging_dir, exist_ok=True)
     os.makedirs(config.cache_dir, exist_ok=True)
+    os.makedirs(getattr(config, 'preprocess_cache_dir', './preprocessed_cache'), exist_ok=True)
     
-    # Initialize tracking
-    metrics_tracker = MetricsTracker(config.logging_dir, config.run_name) if accelerator.is_main_process else None
+    # Initialize enhanced tracking
+    metrics_tracker = None
+    if accelerator.is_main_process:
+        metrics_tracker = EnhancedMetricsTracker(
+            config.logging_dir, 
+            config.run_name,
+            detailed_monitoring=config.detailed_monitoring,
+            enable_profiling=config.enable_profiling
+        )
+    
     checkpoint_manager = CheckpointManager(config.bucket_name, config.checkpoint_bucket_path, config.output_dir)
     
     # Create model
@@ -159,12 +187,20 @@ def main():
         weight_decay=config.weight_decay,
     )
     
-    # Create dataloader
-    train_dataloader, num_files = create_dataloader(config, accelerator)
+    # Create optimized dataloader
+    train_dataloader, num_files = create_dataloader(
+        config, 
+        accelerator, 
+        use_optimized=config.use_optimized_dataset
+    )
     
-    # Calculate training steps
+    # Calculate training steps with test mode limitations
     num_update_steps_per_epoch = len(train_dataloader) // config.gradient_accumulation_steps
-    if config.max_steps > 0:
+    
+    if args.mode == "test" and config.max_test_steps > 0:
+        max_steps = config.max_test_steps
+        print(f"Test mode: Limiting training to {max_steps} steps")
+    elif config.max_steps > 0:
         max_steps = config.max_steps
     else:
         max_steps = num_update_steps_per_epoch * 100  # Default to 100 epochs
@@ -202,6 +238,7 @@ def main():
     if accelerator.is_main_process:
         print(f"Starting training from epoch {starting_epoch}, step {completed_steps}")
         print(f"Total files: {num_files}, Files processed: {files_processed}")
+        print(f"Max steps: {max_steps}")
     
     model.train()
     total_loss = 0
@@ -214,11 +251,19 @@ def main():
         disable=not accelerator.is_local_main_process,
     )
     
+    # Performance tracking
+    step_start_time = time.time()
+    
     for epoch in range(starting_epoch, 100):  # Max 100 epochs
         for step, batch in enumerate(train_dataloader):
             # Skip completed steps when resuming
             if completed_steps > 0 and step < completed_steps:
                 continue
+            
+            # Start timing for profiling
+            if metrics_tracker and config.enable_profiling:
+                data_load_time = metrics_tracker.profiler.start_timer('data_loading')
+                metrics_tracker.profiler.end_timer('data_loading', step_start_time)
             
             with accelerator.accumulate(model):
                 # Check input shapes for debugging (will only print a few times)
@@ -230,7 +275,8 @@ def main():
                           f"attention_mask={batch['attention_mask'].dtype}, "
                           f"labels={batch['labels'].dtype}")
                 
-                # Forward pass
+                # Forward pass with profiling
+                forward_start = time.time() if config.enable_profiling else None
                 outputs = model(
                     input_ids=batch['input_ids'],
                     attention_mask=batch['attention_mask'],
@@ -239,8 +285,15 @@ def main():
                 loss = outputs.loss
                 total_loss += loss.detach().float()
                 
-                # Backward pass
+                if metrics_tracker and config.enable_profiling:
+                    metrics_tracker.profiler.end_timer('model_forward', forward_start)
+                
+                # Backward pass with profiling
+                backward_start = time.time() if config.enable_profiling else None
                 accelerator.backward(loss)
+                
+                if metrics_tracker and config.enable_profiling:
+                    metrics_tracker.profiler.end_timer('model_backward', backward_start)
                 
                 # Gradient clipping
                 if accelerator.sync_gradients and config.max_grad_norm > 0:
@@ -257,7 +310,7 @@ def main():
                 tokens_processed += batch['input_ids'].numel() * accelerator.num_processes
                 
                 # Calculate file progress
-                steps_per_file = len(train_dataloader) // num_files
+                steps_per_file = len(train_dataloader) // num_files if num_files > 0 else 1
                 current_files = min(num_files, completed_steps // steps_per_file)
                 
                 # Log metrics
@@ -270,8 +323,8 @@ def main():
                     perplexity = compute_perplexity(avg_loss)
                     current_lr = lr_scheduler.get_last_lr()[0]
                     
-                    if accelerator.is_main_process:
-                        # Update metrics tracker
+                    if accelerator.is_main_process and metrics_tracker:
+                        # Update enhanced metrics tracker
                         metrics_tracker.update({
                             'loss': avg_loss,
                             'learning_rate': current_lr,
@@ -323,7 +376,12 @@ def main():
                 
                 # Check if we've reached max steps
                 if completed_steps >= max_steps:
+                    if accelerator.is_main_process:
+                        print(f"\nReached maximum steps ({max_steps}). Stopping training.")
                     break
+            
+            # Start timing next iteration
+            step_start_time = time.time()
         
         if completed_steps >= max_steps:
             break
@@ -345,7 +403,8 @@ def main():
             }
         )
         
-        metrics_tracker.close()
+        if metrics_tracker:
+            metrics_tracker.close()
         print("Training finished successfully!")
 
 

@@ -17,6 +17,12 @@ class TrainingConfig:
     checkpoint_bucket_path: str = "Checkpoints"
     max_train_files: Optional[int] = None  # None for all files
     
+    # Preprocessing optimization settings
+    use_optimized_dataset: bool = True  # Use preprocessed cache
+    preprocess_cache_dir: str = "./preprocessed_cache"
+    max_test_steps: int = 100  # Limit steps for test runs
+    enable_profiling: bool = False  # Enable performance profiling
+    
     # Training hyperparameters
     learning_rate: float = 2e-4
     warmup_steps: int = 2000
@@ -46,11 +52,12 @@ class TrainingConfig:
     checkpoint_every_n_files: int = 5
     resume_from_checkpoint: Optional[str] = None
     
-    # Logging
+    # Logging and monitoring
     logging_steps: int = 10
     logging_first_step: bool = True
     report_to: str = "tensorboard"
     run_name: Optional[str] = None
+    detailed_monitoring: bool = False  # Enable detailed performance monitoring
     
     # FSDP specific settings
     fsdp_min_num_params: int = 1e8  # Wrap layers > 100M params
@@ -83,6 +90,11 @@ def get_test_config():
         checkpoint_every_n_files=5,
         logging_steps=5,
         run_name="test_run_25_files",
+        # Test-specific optimizations
+        max_test_steps=100,  # Only 100 steps for quick testing
+        use_optimized_dataset=True,
+        enable_profiling=True,  # Enable profiling for test runs
+        detailed_monitoring=True,  # Detailed monitoring for test runs
     )
     return config
 
@@ -97,5 +109,10 @@ def get_production_config():
         checkpoint_every_n_files=5,
         logging_steps=10,
         run_name="production_run_full",
+        # Production-specific settings
+        max_test_steps=-1,  # No step limit for production
+        use_optimized_dataset=True,
+        enable_profiling=False,  # Disable profiling for production
+        detailed_monitoring=False,  # Basic monitoring for production
     )
     return config 
