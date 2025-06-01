@@ -91,6 +91,61 @@ class GCSDataLoader:
         
         # Load and preprocess the file
         print(f"Preprocessing {os.path.basename(file_path)}...")
+        
+        # Load raw data
+        data = np.load(file_path)
+        input_ids = data['input_ids']
+        
+        # Handle the case where the NPZ file contains 2D data already
+        if input_ids.ndim > 1:
+            if input_ids.ndim == 2:
+                pass  # Keep as is
+            elif input_ids.ndim == 3 and input_ids.shape[-1] == 1:
+                input_ids = input_ids.squeeze(-1)
+            # Flatten the array into a single sequence
+            input_ids = input_ids.reshape(-1)
+        
+        # Create sequences with stride
+        num_sequences = max(1, (len(input_ids) - max_length) // stride + 1)
+        sequences = []
+        
+        for seq_idx in range(num_sequences):
+            start_idx = seq_idx * stride
+            end_idx = start_idx + max_length
+            
+            if end_idx > len(input_ids):
+                end_idx = len(input_ids)
+            
+            sequence = input_ids[start_idx:end_idx]
+            
+            # Pad if necessary
+            if len(sequence) < max_length:
+                sequence = np.pad(sequence, (0, max_length - len(sequence)), 
+                                mode='constant', constant_values=0)
+            
+            sequences.append(sequence)
+        
+        # Cache the processed data
+        cached_data = {
+            'sequences': np.array(sequences),
+            'max_length': max_length,
+            'stride': stride,
+            'num_sequences': len(sequences)
+        }
+        
+        # Save to disk cache
+        os.makedirs(os.path.dirname(cache_path), exist_ok=True)
+        try:
+            with open(cache_path, 'wb') as f:
+                pickle.dump(cached_data, f)
+        except Exception as e:
+            print(f"Warning: Could not save cache for {file_path}: {e}")
+        
+        # Store in memory cache
+        self.flattened_cache[file_path] = cached_data
+        
+        return cached_data
+    
     def load_npz_file(self, file_path: str) -> np.ndarray:
         """Load tokenized data from npz file"""
         data = np.load(file_path)
@@ -115,6 +170,61 @@ class GCSDataLoader:
             print(f"Reshaped data to: {input_ids.shape}")
         
         return input_ids
+
+
+class OptimizedTokenizedDataset(Dataset):
+    """Optimized PyTorch Dataset that uses preprocessed cached data"""
+    
+    def __init__(self, 
+                 data_loader: GCSDataLoader,
+                 files: List[str],
+                 max_length: int = 2048,
+                 stride: int = 2048):
+        self.data_loader = data_loader
+        self.files = files
+        self.max_length = max_length
+        self.stride = stride
+        
+        # Build index of all sequences using cached data
+        self.file_indices = []
+        self.sequence_indices = []
+        self.cached_data = []
+        
+        print("Building optimized dataset index with preprocessing cache...")
+        for file_idx, file_name in enumerate(tqdm(files)):
+            local_path = self.data_loader.download_file(file_name)
+            cached_data = self.data_loader.load_npz_file_optimized(local_path, max_length, stride)
+            
+            num_sequences = cached_data['num_sequences']
+            self.cached_data.append(cached_data)
+            
+            for seq_idx in range(num_sequences):
+                self.file_indices.append(file_idx)
+                self.sequence_indices.append(seq_idx)
+        
+        print(f"Total sequences (optimized): {len(self.file_indices)}")
+    
+    def __len__(self):
+        return len(self.file_indices)
+    
+    def __getitem__(self, idx):
+        file_idx = self.file_indices[idx]
+        seq_idx = self.sequence_indices[idx]
+        
+        # Get sequence from cached data (much faster!)
+        cached_data = self.cached_data[file_idx]
+        sequence = cached_data['sequences'][seq_idx]
+        
+        # Convert to tensor with explicit dtype=torch.long
+        input_ids = torch.tensor(sequence[:-1], dtype=torch.long)
+        labels = torch.tensor(sequence[1:], dtype=torch.long)
+        attention_mask = (input_ids != 0).long()
+        
+        return {
+            'input_ids': input_ids,
+            'labels': labels,
+            'attention_mask': attention_mask
+        }
 
 
 class TokenizedDataset(Dataset):
@@ -225,19 +335,32 @@ def collate_fn(batch):
 
 def create_dataloader(config, accelerator=None):
     """Create DataLoader for training"""
-    # Initialize GCS data loader
-    gcs_loader = GCSDataLoader(config.bucket_name, config.cache_dir)
+    # Initialize GCS data loader with preprocessed cache directory from config
+    preprocess_cache_dir = getattr(config, 'preprocess_cache_dir', './preprocessed_cache')
+    gcs_loader = GCSDataLoader(config.bucket_name, config.cache_dir, preprocess_cache_dir)
     
     # List files
     files = gcs_loader.list_data_files(max_files=config.max_train_files)
     
-    # Create dataset
-    dataset = TokenizedDataset(
-        gcs_loader,
-        files,
-        max_length=2048,  # Match model's max position embeddings
-        stride=2048  # No overlap
-    )
+    # Choose dataset class based on optimization setting
+    use_optimized = getattr(config, 'use_optimized_dataset', False)
+    
+    if use_optimized:
+        print("Using OptimizedTokenizedDataset with preprocessing cache...")
+        dataset = OptimizedTokenizedDataset(
+            gcs_loader,
+            files,
+            max_length=2048,  # Match model's max position embeddings
+            stride=2048  # No overlap
+        )
+    else:
+        print("Using standard TokenizedDataset...")
+        dataset = TokenizedDataset(
+            gcs_loader,
+            files,
+            max_length=2048,  # Match model's max position embeddings
+            stride=2048  # No overlap
+        )
     
     # Create dataloader with custom collate function
     dataloader = DataLoader(
