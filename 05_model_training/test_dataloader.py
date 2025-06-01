@@ -30,7 +30,7 @@ def test_preprocessing_performance():
     
     # Time the dataloader creation (includes preprocessing)
     start_time = time.time()
-    dataloader, num_files = create_dataloader(config, use_optimized=True)
+    dataloader, num_files = create_dataloader(config)
     setup_time = time.time() - start_time
     
     print(f"Dataloader setup time: {setup_time:.2f}s")
@@ -121,7 +121,7 @@ def compare_optimized_vs_legacy():
     # Test legacy approach
     print("\nTesting LEGACY data loading...")
     start_time = time.time()
-    legacy_dataloader, _ = create_dataloader(config, use_optimized=False)
+    legacy_dataloader, _ = create_dataloader(config)
     legacy_time = time.time() - start_time
     
     # Get one batch to test processing time
@@ -132,7 +132,7 @@ def compare_optimized_vs_legacy():
     # Test optimized approach
     print("\nTesting OPTIMIZED data loading...")
     start_time = time.time()
-    optimized_dataloader, _ = create_dataloader(config, use_optimized=True)
+    optimized_dataloader, _ = create_dataloader(config)
     optimized_time = time.time() - start_time
     
     # Get one batch to test processing time
