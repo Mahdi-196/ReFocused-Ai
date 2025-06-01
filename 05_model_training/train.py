@@ -221,6 +221,15 @@ def main():
                 continue
             
             with accelerator.accumulate(model):
+                # Check input shapes for debugging (will only print a few times)
+                if completed_steps < 3 and accelerator.is_main_process:
+                    print(f"Input shapes: input_ids={batch['input_ids'].shape}, "
+                          f"attention_mask={batch['attention_mask'].shape}, "
+                          f"labels={batch['labels'].shape}")
+                    print(f"Input dtypes: input_ids={batch['input_ids'].dtype}, "
+                          f"attention_mask={batch['attention_mask'].dtype}, "
+                          f"labels={batch['labels'].dtype}")
+                
                 # Forward pass
                 outputs = model(
                     input_ids=batch['input_ids'],

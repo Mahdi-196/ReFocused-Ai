@@ -35,7 +35,7 @@ pip install wandb==0.16.2
 pip install tensorboard==2.15.1
 pip install google-cloud-storage==2.13.0
 pip install sentencepiece==0.1.99
-pip install protobuf==4.25.2
+pip install protobuf==4.23.4
 
 # Create necessary directories
 echo "Creating directory structure..."

@@ -54,7 +54,13 @@ class GCSDataLoader:
     def load_npz_file(self, file_path: str) -> np.ndarray:
         """Load tokenized data from npz file"""
         data = np.load(file_path)
-        return data['input_ids']  # Assuming tokenized data is stored as 'input_ids'
+        input_ids = data['input_ids']  # Assuming tokenized data is stored as 'input_ids'
+        
+        # Ensure input_ids have the correct shape [seq_len] (not [seq_len, 1])
+        if input_ids.ndim == 2 and input_ids.shape[-1] == 1:
+            input_ids = input_ids.squeeze(-1)
+        
+        return input_ids
 
 
 class TokenizedDataset(Dataset):
@@ -110,14 +116,22 @@ class TokenizedDataset(Dataset):
             sequence = np.pad(sequence, (0, self.max_length - len(sequence)), 
                             mode='constant', constant_values=0)
         
-        # Convert to tensor
+        # Ensure correct shape and dtype
+        if isinstance(sequence, np.ndarray) and sequence.ndim > 1:
+            sequence = sequence.squeeze()
+        
+        # Convert to tensor with explicit dtype=torch.long
         input_ids = torch.tensor(sequence[:-1], dtype=torch.long)
         labels = torch.tensor(sequence[1:], dtype=torch.long)
+        attention_mask = (input_ids != 0).long()  # Explicit long type
+        
+        # Debug shape information
+        # print(f"Input IDs shape: {input_ids.shape}, dtype: {input_ids.dtype}")
         
         return {
             'input_ids': input_ids,
             'labels': labels,
-            'attention_mask': (input_ids != 0).long()
+            'attention_mask': attention_mask
         }
 
 
