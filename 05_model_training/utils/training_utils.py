@@ -7,11 +7,24 @@ import time
 from typing import Dict, Any, Optional
 from collections import defaultdict, deque
 import numpy as np
-from torch.utils.tensorboard import SummaryWriter
 import os
-import psutil
 import threading
 import json
+
+# Optional dependencies - gracefully handle if not available
+try:
+    from torch.utils.tensorboard import SummaryWriter
+    HAS_TENSORBOARD = True
+except ImportError:
+    HAS_TENSORBOARD = False
+    print("Warning: tensorboard not available, metrics logging will be limited")
+
+try:
+    import psutil
+    HAS_PSUTIL = True
+except ImportError:
+    HAS_PSUTIL = False
+    print("Warning: psutil not available, system monitoring will be disabled")
 
 
 class PerformanceProfiler:
@@ -74,9 +87,15 @@ class PerformanceProfiler:
         else:
             gpu_memory = gpu_memory_max = 0
         
-        # CPU memory
-        process = psutil.Process()
-        cpu_memory = process.memory_info().rss / 1024**3  # GB
+        # CPU memory (only if psutil available)
+        if HAS_PSUTIL:
+            try:
+                process = psutil.Process()
+                cpu_memory = process.memory_info().rss / 1024**3  # GB
+            except Exception:
+                cpu_memory = 0
+        else:
+            cpu_memory = 0
         
         self.memory_usage.append({
             'timestamp': time.time(),
@@ -131,8 +150,15 @@ class EnhancedMetricsTracker:
         self.detailed_monitoring = detailed_monitoring
         os.makedirs(log_dir, exist_ok=True)
         
-        # Initialize tensorboard writer
-        self.writer = SummaryWriter(os.path.join(log_dir, run_name))
+        # Initialize tensorboard writer (if available)
+        if HAS_TENSORBOARD:
+            try:
+                self.writer = SummaryWriter(os.path.join(log_dir, run_name))
+            except Exception as e:
+                print(f"Warning: Could not initialize tensorboard writer: {e}")
+                self.writer = None
+        else:
+            self.writer = None
         
         # Metrics storage
         self.metrics = defaultdict(list)
@@ -147,8 +173,8 @@ class EnhancedMetricsTracker:
         # Performance profiler
         self.profiler = PerformanceProfiler(enable_profiling)
         
-        # Monitoring thread for system metrics
-        self.monitoring_active = detailed_monitoring
+        # Monitoring thread for system metrics (only if psutil available)
+        self.monitoring_active = detailed_monitoring and HAS_PSUTIL
         if self.monitoring_active:
             self.system_metrics = defaultdict(list)
             self.start_system_monitoring()
@@ -158,6 +184,10 @@ class EnhancedMetricsTracker:
         def monitor_system():
             while self.monitoring_active:
                 try:
+                    # Only proceed if psutil is available (should always be true when this method is called)
+                    if not HAS_PSUTIL:
+                        break
+                        
                     # CPU usage
                     cpu_percent = psutil.cpu_percent(interval=1)
                     
@@ -176,8 +206,8 @@ class EnhancedMetricsTracker:
                     self.system_metrics['disk_read_mb'].append((timestamp, disk_io.read_bytes / 1024**2))
                     self.system_metrics['disk_write_mb'].append((timestamp, disk_io.write_bytes / 1024**2))
                     
-                    # Log to tensorboard if detailed monitoring is enabled
-                    if len(self.system_metrics['cpu_percent']) % 10 == 0:  # Every 10 seconds
+                    # Log to tensorboard if available and detailed monitoring is enabled
+                    if self.writer and len(self.system_metrics['cpu_percent']) % 10 == 0:  # Every 10 seconds
                         latest_step = len(self.metrics.get('loss', []))
                         if latest_step > 0:
                             self.writer.add_scalar('system/cpu_percent', cpu_percent, latest_step)
@@ -201,19 +231,22 @@ class EnhancedMetricsTracker:
         # Update metrics
         for key, value in metrics.items():
             self.metrics[key].append(value)
-            self.writer.add_scalar(f'train/{key}', value, step)
+            if self.writer:
+                self.writer.add_scalar(f'train/{key}', value, step)
         
         # Track loss window for smoothed loss
         if 'loss' in metrics:
             self.loss_window.append(metrics['loss'])
             smoothed_loss = np.mean(self.loss_window)
-            self.writer.add_scalar('train/loss_smoothed', smoothed_loss, step)
+            if self.writer:
+                self.writer.add_scalar('train/loss_smoothed', smoothed_loss, step)
         
         # Track gradient norm
         if 'grad_norm' in metrics:
             self.gradient_norm_history.append(metrics['grad_norm'])
             avg_grad_norm = np.mean(self.gradient_norm_history)
-            self.writer.add_scalar('train/grad_norm_avg', avg_grad_norm, step)
+            if self.writer:
+                self.writer.add_scalar('train/grad_norm_avg', avg_grad_norm, step)
         
         # Calculate and log training speed
         if len(self.step_times) > 10:
@@ -221,9 +254,10 @@ class EnhancedMetricsTracker:
             samples_per_second = metrics.get('batch_size', 1) / avg_step_time
             self.throughput_history.append(samples_per_second)
             
-            self.writer.add_scalar('speed/samples_per_second', samples_per_second, step)
-            self.writer.add_scalar('speed/step_time', avg_step_time, step)
-            self.writer.add_scalar('speed/avg_throughput', np.mean(self.throughput_history), step)
+            if self.writer:
+                self.writer.add_scalar('speed/samples_per_second', samples_per_second, step)
+                self.writer.add_scalar('speed/step_time', avg_step_time, step)
+                self.writer.add_scalar('speed/avg_throughput', np.mean(self.throughput_history), step)
         
         # Record memory usage if profiling enabled
         self.profiler.record_memory_usage()
@@ -236,19 +270,22 @@ class EnhancedMetricsTracker:
         """Log detailed performance metrics"""
         perf_summary = self.profiler.get_performance_summary()
         
-        for metric_name, value in perf_summary.items():
-            self.writer.add_scalar(f'performance/{metric_name}', value, step)
+        if self.writer:
+            for metric_name, value in perf_summary.items():
+                self.writer.add_scalar(f'performance/{metric_name}', value, step)
         
         # Log training stability metrics
         if len(self.loss_window) > 10:
             loss_variance = np.var(list(self.loss_window))
             loss_trend = np.polyfit(range(len(self.loss_window)), list(self.loss_window), 1)[0]
-            self.writer.add_scalar('stability/loss_variance', loss_variance, step)
-            self.writer.add_scalar('stability/loss_trend', loss_trend, step)
+            if self.writer:
+                self.writer.add_scalar('stability/loss_variance', loss_variance, step)
+                self.writer.add_scalar('stability/loss_trend', loss_trend, step)
         
         if len(self.gradient_norm_history) > 10:
             grad_norm_variance = np.var(list(self.gradient_norm_history))
-            self.writer.add_scalar('stability/grad_norm_variance', grad_norm_variance, step)
+            if self.writer:
+                self.writer.add_scalar('stability/grad_norm_variance', grad_norm_variance, step)
     
     def log_summary(self, step: int, epoch: int, files_processed: int):
         """Log training summary with enhanced details"""
@@ -308,7 +345,8 @@ class EnhancedMetricsTracker:
     def close(self):
         """Close tensorboard writer and stop monitoring"""
         self.monitoring_active = False
-        self.writer.close()
+        if self.writer:
+            self.writer.close()
         
         # Save final summary
         summary_path = os.path.join(self.log_dir, f"{self.run_name}_summary.json")
