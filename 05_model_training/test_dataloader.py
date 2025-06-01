@@ -47,10 +47,16 @@ def main():
         # Check for expected shape [batch_size, seq_len]
         if batch['input_ids'].ndim == 2:
             print("✅ input_ids has correct shape [batch_size, seq_len]")
+            # Test unpacking to verify it will work in the model
+            try:
+                batch_size, seq_length = batch['input_ids'].shape
+                print(f"✅ Successfully unpacked shape into batch_size={batch_size}, seq_length={seq_length}")
+            except ValueError as e:
+                print(f"❌ Failed to unpack shape: {e}")
         else:
             print(f"❌ input_ids has incorrect shape: {batch['input_ids'].shape}")
-            if batch['input_ids'].ndim == 3 and batch['input_ids'].shape[-1] == 1:
-                print("  This needs to be squeezed to remove the last dimension")
+            if batch['input_ids'].ndim == 3:
+                print("  This needs to be reshaped to [batch_size*subseq, seq_len]")
         
         # Check for expected dtype torch.long
         if batch['input_ids'].dtype == torch.long:
@@ -58,6 +64,16 @@ def main():
         else:
             print(f"❌ input_ids has incorrect dtype: {batch['input_ids'].dtype}")
             print("  This should be torch.long")
+        
+        # Try a sample forward pass simulation
+        print("\nSimulating model input shape validation:")
+        try:
+            input_shape = batch['input_ids'].size()
+            batch_size, seq_length = input_shape
+            print(f"✅ Model would receive correct input_shape: {input_shape}")
+            print(f"✅ Successfully unpacked as batch_size={batch_size}, seq_length={seq_length}")
+        except ValueError as e:
+            print(f"❌ Model would fail with error: {e}")
         
         # Only print first 3 batches
         if i >= 2:

@@ -56,9 +56,23 @@ class GCSDataLoader:
         data = np.load(file_path)
         input_ids = data['input_ids']  # Assuming tokenized data is stored as 'input_ids'
         
-        # Ensure input_ids have the correct shape [seq_len] (not [seq_len, 1])
-        if input_ids.ndim == 2 and input_ids.shape[-1] == 1:
-            input_ids = input_ids.squeeze(-1)
+        # Handle the case where the NPZ file contains 2D data already
+        # If the shape is [num_sequences, seq_len], flatten to 1D array
+        if input_ids.ndim > 1:
+            print(f"Loaded data shape before flattening: {input_ids.shape}")
+            # If it's already a 2D array, keep only the necessary dimension
+            # instead of squeezing which might collapse both dimensions
+            if input_ids.ndim == 2:
+                # If it's [num_sequences, seq_len], keep it as is
+                pass
+            elif input_ids.ndim == 3 and input_ids.shape[-1] == 1:
+                # If it's [num_sequences, seq_len, 1], remove the last dimension
+                input_ids = input_ids.squeeze(-1)
+            
+            # Flatten the array into a single sequence if it's 2D
+            # This way we'll extract subsequences from the flattened array
+            input_ids = input_ids.reshape(-1)
+            print(f"Reshaped data to: {input_ids.shape}")
         
         return input_ids
 
@@ -79,6 +93,7 @@ class TokenizedDataset(Dataset):
         # Build index of all sequences
         self.file_indices = []
         self.sequence_indices = []
+        self.sequences_per_file = []
         
         print("Building dataset index...")
         for file_idx, file_name in enumerate(tqdm(files)):
@@ -87,6 +102,8 @@ class TokenizedDataset(Dataset):
             
             # Create sequences with stride
             num_sequences = max(1, (len(tokens) - max_length) // stride + 1)
+            self.sequences_per_file.append(num_sequences)
+            
             for seq_idx in range(num_sequences):
                 self.file_indices.append(file_idx)
                 self.sequence_indices.append(seq_idx)
@@ -105,9 +122,14 @@ class TokenizedDataset(Dataset):
         local_path = self.data_loader.download_file(file_name)
         tokens = self.data_loader.load_npz_file(local_path)
         
-        # Extract sequence
+        # Extract sequence from the flattened array
         start_idx = seq_idx * self.stride
         end_idx = start_idx + self.max_length
+        
+        # Ensure we don't go out of bounds
+        if end_idx > len(tokens):
+            print(f"Warning: Sequence end index {end_idx} exceeds token length {len(tokens)}")
+            end_idx = len(tokens)
         
         sequence = tokens[start_idx:end_idx]
         
@@ -116,9 +138,9 @@ class TokenizedDataset(Dataset):
             sequence = np.pad(sequence, (0, self.max_length - len(sequence)), 
                             mode='constant', constant_values=0)
         
-        # Ensure correct shape and dtype
+        # Ensure sequence is 1D before creating tensors
         if isinstance(sequence, np.ndarray) and sequence.ndim > 1:
-            sequence = sequence.squeeze()
+            sequence = sequence.reshape(-1)
         
         # Convert to tensor with explicit dtype=torch.long
         input_ids = torch.tensor(sequence[:-1], dtype=torch.long)
@@ -133,6 +155,32 @@ class TokenizedDataset(Dataset):
             'labels': labels,
             'attention_mask': attention_mask
         }
+
+
+# Custom collate function to handle 3D tensors
+def collate_fn(batch):
+    """Custom collate function that ensures proper tensor shapes"""
+    
+    # First apply the default collate to get a batch
+    input_ids = torch.stack([item['input_ids'] for item in batch])
+    labels = torch.stack([item['labels'] for item in batch])
+    attention_mask = torch.stack([item['attention_mask'] for item in batch])
+    
+    # Check if we have a 3D tensor problem (batch, subseq, seq_len)
+    if input_ids.ndim == 3:
+        # Reshape: [batch_size, num_subseq, seq_len] -> [batch_size*num_subseq, seq_len]
+        batch_size, num_subseq, seq_len = input_ids.shape
+        input_ids = input_ids.reshape(-1, seq_len)
+        labels = labels.reshape(-1, seq_len)
+        attention_mask = attention_mask.reshape(-1, seq_len)
+        
+        print(f"Reshaped tensors from [{batch_size}, {num_subseq}, {seq_len}] to [{batch_size*num_subseq}, {seq_len}]")
+    
+    return {
+        'input_ids': input_ids,
+        'labels': labels,
+        'attention_mask': attention_mask
+    }
 
 
 def create_dataloader(config, accelerator=None):
@@ -151,14 +199,15 @@ def create_dataloader(config, accelerator=None):
         stride=2048  # No overlap
     )
     
-    # Create dataloader
+    # Create dataloader with custom collate function
     dataloader = DataLoader(
         dataset,
         batch_size=config.per_device_train_batch_size,
         shuffle=True,
         num_workers=config.dataloader_num_workers,
         pin_memory=True,
-        drop_last=True
+        drop_last=True,
+        collate_fn=collate_fn  # Use custom collate function
     )
     
     return dataloader, len(files) 
