@@ -16,6 +16,7 @@ from accelerate import Accelerator
 from accelerate.utils import FullyShardedDataParallelPlugin
 from torch.distributed.fsdp.fully_sharded_data_parallel import FullStateDictConfig
 from torch.distributed.fsdp import FullyShardedDataParallel as FSDP
+from torch.distributed.fsdp.wrap import transformer_auto_wrap_policy
 import argparse
 from tqdm import tqdm
 import math
@@ -37,6 +38,17 @@ from utils import (
 
 def setup_fsdp_plugin():
     """Configure FSDP plugin for Accelerate"""
+    # Import GPTNeoXLayer to use in wrap policy
+    from transformers.models.gpt_neox.modeling_gpt_neox import GPTNeoXLayer
+    
+    # Create auto wrap policy for GPTNeoXLayer
+    auto_wrap_policy = lambda module, *args, **kwargs: transformer_auto_wrap_policy(
+        module,
+        {GPTNeoXLayer},
+        *args,
+        **kwargs
+    )
+    
     fsdp_plugin = FullyShardedDataParallelPlugin(
         # Sharding strategy
         sharding_strategy="FULL_SHARD",
@@ -59,9 +71,8 @@ def setup_fsdp_plugin():
         # Activation checkpointing
         activation_checkpointing=True,
         
-        # Auto wrap policy - wrap transformer layers
-        auto_wrap_policy="transformer_based_wrap",
-        transformer_layer_cls_to_wrap=["GPTNeoXLayer"],
+        # Auto wrap policy - using function instead of string
+        auto_wrap_policy=auto_wrap_policy,
         
         # State dict config for checkpointing
         state_dict_type="FULL_STATE_DICT",
