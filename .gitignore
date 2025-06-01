@@ -3,6 +3,15 @@ data/
 *.txt.gz
 *.jsonl
 
+# Training data files - NEVER commit these
+*.npz
+data/training/
+data/training/**
+05_model_training/cache/
+05_model_training/preprocessed_cache/
+preprocessed_cache/
+cache/
+
 # Python cache and compiled files
 __pycache__/
 *.py[cod]
