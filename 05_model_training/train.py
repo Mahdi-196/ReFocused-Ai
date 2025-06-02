@@ -1,278 +1,134 @@
+#!/usr/bin/env python3
 """
-Main training script for ReFocused-AI model with FSDP support
+Clean training script for ReFocused-AI 1.2B model
 """
 
 import os
 import sys
 import torch
-import torch.nn as nn
 from torch.optim import AdamW
-from transformers import (
-    GPTNeoXForCausalLM,
-    get_scheduler,
-    set_seed
-)
+from transformers import GPTNeoXForCausalLM, get_scheduler, set_seed
 from accelerate import Accelerator
-from accelerate.utils import FullyShardedDataParallelPlugin
-from torch.distributed.fsdp.fully_sharded_data_parallel import FullStateDictConfig
-from torch.distributed.fsdp import FullyShardedDataParallel as FSDP
-from torch.distributed.fsdp.wrap import transformer_auto_wrap_policy
 import argparse
 from tqdm import tqdm
-import math
 import time
 
 # Add project root to path
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from configs import get_model_config, get_test_config, get_production_config
-from utils import (
-    create_dataloader,
-    CheckpointManager,
-    EnhancedMetricsTracker,
-    get_grad_norm,
-    compute_perplexity,
-    count_parameters,
-    format_metrics_log
-)
+from configs import get_model_config, get_training_config
+from utils import create_dataloader, CheckpointManager, count_parameters
 
 
-def setup_fsdp_plugin():
-    """Configure FSDP plugin for Accelerate"""
-    # Import GPTNeoXLayer to use in wrap policy
-    from transformers.models.gpt_neox.modeling_gpt_neox import GPTNeoXLayer
-    
-    # Create auto wrap policy for GPTNeoXLayer
-    auto_wrap_policy = lambda module, *args, **kwargs: transformer_auto_wrap_policy(
-        module,
-        {GPTNeoXLayer},
-        *args,
-        **kwargs
-    )
-    
-    fsdp_plugin = FullyShardedDataParallelPlugin(
-        # Sharding strategy
-        sharding_strategy="FULL_SHARD",
-        
-        # CPU offload for memory efficiency (disable for max speed)
-        cpu_offload=False,
-        
-        # Backward prefetch for better overlap
-        backward_prefetch="BACKWARD_PRE",
-        
-        # Forward prefetch
-        forward_prefetch=True,
-        
-        # Use orig params for better optimizer compatibility  
-        use_orig_params=True,
-        
-        # Sync module states for better checkpoint compatibility
-        sync_module_states=True,
-        
-        # Activation checkpointing
-        activation_checkpointing=True,
-        
-        # Auto wrap policy - using function instead of string
-        auto_wrap_policy=auto_wrap_policy,
-        
-        # State dict config for checkpointing
-        state_dict_type="FULL_STATE_DICT",
-        state_dict_config=FullStateDictConfig(offload_to_cpu=True, rank0_only=True),
-    )
-    return fsdp_plugin
+def check_gpu():
+    """Quick GPU check"""
+    print(f"🔥 GPU Status:")
+    print(f"  CUDA available: {torch.cuda.is_available()}")
+    if torch.cuda.is_available():
+        print(f"  GPU count: {torch.cuda.device_count()}")
+        for i in range(torch.cuda.device_count()):
+            print(f"  GPU {i}: {torch.cuda.get_device_name(i)}")
+    else:
+        print("  ⚠️  Running on CPU - training will be slow")
+    return torch.cuda.is_available()
 
 
 def main():
     parser = argparse.ArgumentParser(description="Train ReFocused-AI model")
-    parser.add_argument("--mode", type=str, choices=["test", "production"], 
-                       default="test", help="Training mode")
-    parser.add_argument("--resume", type=str, default=None, 
-                       help="Resume from checkpoint")
-    parser.add_argument("--seed", type=int, default=42, 
-                       help="Random seed")
-    parser.add_argument("--profile", action="store_true", 
-                       help="Enable performance profiling")
+    parser.add_argument("--config", type=str, choices=["test", "production"], 
+                       default="test", help="Training configuration")
     parser.add_argument("--max-steps", type=int, default=None,
-                       help="Override max steps for testing")
+                       help="Override max steps")
+    parser.add_argument("--resume", type=str, default=None,
+                       help="Resume from checkpoint")
     args = parser.parse_args()
     
-    # Set seed for reproducibility
-    set_seed(args.seed)
+    # Check GPU status
+    cuda_available = check_gpu()
     
-    # Get configuration based on mode
-    if args.mode == "test":
-        config = get_test_config()
-        print("Running TEST training with optimized preprocessing...")
-    else:
-        config = get_production_config()
-        print("Running PRODUCTION training on full dataset...")
+    # Set seed
+    set_seed(42)
     
-    # Override configuration with command line arguments
-    if args.profile:
-        config.enable_profiling = True
-        config.detailed_monitoring = True
+    # Load configuration
+    config = get_training_config(args.config)
+    if args.max_steps:
+        config.max_steps = args.max_steps
     
-    if args.max_steps is not None:
-        config.max_test_steps = args.max_steps
+    print(f"\n🚀 Starting {args.config.upper()} training")
+    print(f"  Max steps: {config.max_steps}")
+    print(f"  Batch size: {config.per_device_train_batch_size}")
+    print(f"  Learning rate: {config.learning_rate}")
     
-    # Initialize FSDP plugin
-    fsdp_plugin = setup_fsdp_plugin()
-    
-    # Initialize accelerator with FSDP
+    # Initialize accelerator
     accelerator = Accelerator(
         gradient_accumulation_steps=config.gradient_accumulation_steps,
-        mixed_precision="bf16" if config.bf16 else "fp16" if config.fp16 else "no",
-        log_with=config.report_to,
-        project_dir=config.logging_dir,
-        fsdp_plugin=fsdp_plugin,
+        mixed_precision="bf16" if config.bf16 and cuda_available else "no",
     )
     
-    # Initialize logging
-    if accelerator.is_main_process:
-        print(f"Accelerator state: {accelerator.state}")
-        print(f"Device: {accelerator.device}")
-        print(f"Distributed: {accelerator.distributed_type}")
-        print(f"Num processes: {accelerator.num_processes}")
-        print(f"Mixed precision: {accelerator.mixed_precision}")
-        print(f"Optimizations enabled:")
-        print(f"  - Optimized dataset: {config.use_optimized_dataset}")
-        print(f"  - Profiling: {config.enable_profiling}")
-        print(f"  - Detailed monitoring: {config.detailed_monitoring}")
-        if args.mode == "test":
-            print(f"  - Max test steps: {config.max_test_steps}")
+    print(f"  Device: {accelerator.device}")
+    print(f"  Mixed precision: {accelerator.mixed_precision}")
     
-    # Setup directories
+    # Create directories
     os.makedirs(config.output_dir, exist_ok=True)
     os.makedirs(config.logging_dir, exist_ok=True)
-    os.makedirs(config.cache_dir, exist_ok=True)
-    os.makedirs(getattr(config, 'preprocess_cache_dir', './preprocessed_cache'), exist_ok=True)
     
-    # Initialize enhanced tracking
-    metrics_tracker = None
-    if accelerator.is_main_process:
-        metrics_tracker = EnhancedMetricsTracker(
-            config.logging_dir, 
-            config.run_name,
-            detailed_monitoring=config.detailed_monitoring,
-            enable_profiling=config.enable_profiling
-        )
-    
-    checkpoint_manager = CheckpointManager(config.bucket_name, config.checkpoint_bucket_path, config.output_dir)
-    
-    # Create model
+    # Initialize model
     model_config = get_model_config()
+    model = GPTNeoXForCausalLM(model_config)
     
-    # Initialize model with empty weights to save memory
-    with accelerator.main_process_first():
-        print("Initializing model...")
-        model = GPTNeoXForCausalLM(model_config)
-        
-        # Initialize weights
-        model.apply(model._init_weights)
-        
-        if accelerator.is_main_process:
-            param_count = count_parameters(model)
-            print(f"Model initialized with {param_count/1e9:.2f}B parameters")
-    
-    # Enable gradient checkpointing
-    if config.gradient_checkpointing:
-        model.gradient_checkpointing_enable()
+    if accelerator.is_main_process:
+        param_count = count_parameters(model)
+        print(f"  Model parameters: {param_count/1e9:.2f}B")
     
     # Create optimizer
     optimizer = AdamW(
         model.parameters(),
         lr=config.learning_rate,
-        betas=(config.adam_beta1, config.adam_beta2),
-        eps=config.adam_epsilon,
         weight_decay=config.weight_decay,
     )
     
-    # Create optimized dataloader
+    # Create dataloader
     train_dataloader, num_files = create_dataloader(config, accelerator)
-    
-    # Calculate training steps with test mode limitations
-    num_update_steps_per_epoch = len(train_dataloader) // config.gradient_accumulation_steps
-    
-    if args.mode == "test" and config.max_test_steps > 0:
-        max_steps = config.max_test_steps
-        print(f"Test mode: Limiting training to {max_steps} steps")
-    elif config.max_steps > 0:
-        max_steps = config.max_steps
-    else:
-        max_steps = num_update_steps_per_epoch * 100  # Default to 100 epochs
+    print(f"  Training files: {num_files}")
+    print(f"  Steps per epoch: {len(train_dataloader)}")
     
     # Create scheduler
     lr_scheduler = get_scheduler(
-        name=config.lr_scheduler_type,
+        "cosine",
         optimizer=optimizer,
         num_warmup_steps=config.warmup_steps,
-        num_training_steps=max_steps,
+        num_training_steps=config.max_steps,
     )
     
-    # Prepare for distributed training
+    # Prepare for training
     model, optimizer, train_dataloader, lr_scheduler = accelerator.prepare(
         model, optimizer, train_dataloader, lr_scheduler
     )
     
-    # Resume from checkpoint if specified
-    starting_epoch = 0
-    completed_steps = 0
-    files_processed = 0
-    
-    if args.resume or config.resume_from_checkpoint:
-        checkpoint_name = args.resume or config.resume_from_checkpoint
-        if accelerator.is_main_process:
-            print(f"Resuming from checkpoint: {checkpoint_name}")
-        
-        metadata = checkpoint_manager.load_checkpoint(accelerator, checkpoint_name)
-        if metadata:
-            starting_epoch = metadata.get('epoch', 0)
-            completed_steps = metadata.get('step', 0)
-            files_processed = metadata.get('files_processed', 0)
+    # Initialize checkpoint manager
+    checkpoint_manager = CheckpointManager(
+        config.bucket_name, 
+        config.checkpoint_bucket_path, 
+        config.output_dir
+    )
     
     # Training loop
-    if accelerator.is_main_process:
-        print(f"Starting training from epoch {starting_epoch}, step {completed_steps}")
-        print(f"Total files: {num_files}, Files processed: {files_processed}")
-        print(f"Max steps: {max_steps}")
-    
+    print(f"\n📈 Starting training...")
     model.train()
-    total_loss = 0
-    tokens_processed = 0
+    completed_steps = 0
+    total_loss = 0.0
     
-    # Create progress bar
     progress_bar = tqdm(
-        range(completed_steps, max_steps),
+        range(config.max_steps),
         desc="Training",
         disable=not accelerator.is_local_main_process,
     )
     
-    # Performance tracking
-    step_start_time = time.time()
-    
-    for epoch in range(starting_epoch, 100):  # Max 100 epochs
+    for epoch in range(100):  # Max 100 epochs
         for step, batch in enumerate(train_dataloader):
-            # Skip completed steps when resuming
-            if completed_steps > 0 and step < completed_steps:
-                continue
-            
-            # Start timing for profiling
-            if metrics_tracker and config.enable_profiling:
-                data_load_time = metrics_tracker.profiler.start_timer('data_loading')
-                metrics_tracker.profiler.end_timer('data_loading', step_start_time)
             
             with accelerator.accumulate(model):
-                # Check input shapes for debugging (will only print a few times)
-                if completed_steps < 3 and accelerator.is_main_process:
-                    print(f"Input shapes: input_ids={batch['input_ids'].shape}, "
-                          f"attention_mask={batch['attention_mask'].shape}, "
-                          f"labels={batch['labels'].shape}")
-                    print(f"Input dtypes: input_ids={batch['input_ids'].dtype}, "
-                          f"attention_mask={batch['attention_mask'].dtype}, "
-                          f"labels={batch['labels'].dtype}")
-                
-                # Forward pass with profiling
-                forward_start = time.time() if config.enable_profiling else None
+                # Forward pass
                 outputs = model(
                     input_ids=batch['input_ids'],
                     attention_mask=batch['attention_mask'],
@@ -281,127 +137,54 @@ def main():
                 loss = outputs.loss
                 total_loss += loss.detach().float()
                 
-                if metrics_tracker and config.enable_profiling:
-                    metrics_tracker.profiler.end_timer('model_forward', forward_start)
-                
-                # Backward pass with profiling
-                backward_start = time.time() if config.enable_profiling else None
+                # Backward pass
                 accelerator.backward(loss)
                 
-                if metrics_tracker and config.enable_profiling:
-                    metrics_tracker.profiler.end_timer('model_backward', backward_start)
-                
-                # Gradient clipping
-                if accelerator.sync_gradients and config.max_grad_norm > 0:
+                # Optimizer step
+                if accelerator.sync_gradients:
                     accelerator.clip_grad_norm_(model.parameters(), config.max_grad_norm)
                 
-                # Optimizer step
                 optimizer.step()
                 lr_scheduler.step()
                 optimizer.zero_grad()
             
-            # Update metrics
+            # Update progress
             if accelerator.sync_gradients:
                 completed_steps += 1
-                tokens_processed += batch['input_ids'].numel() * accelerator.num_processes
-                
-                # Calculate file progress
-                steps_per_file = len(train_dataloader) // num_files if num_files > 0 else 1
-                current_files = min(num_files, completed_steps // steps_per_file)
-                
-                # Log metrics
-                if completed_steps % config.logging_steps == 0:
-                    avg_loss = accelerator.gather(total_loss).mean().item() / config.gradient_accumulation_steps / config.logging_steps
-                    total_loss = 0
-                    
-                    # Get additional metrics
-                    grad_norm = get_grad_norm(model) if accelerator.is_main_process else None
-                    perplexity = compute_perplexity(avg_loss)
-                    current_lr = lr_scheduler.get_last_lr()[0]
-                    
-                    if accelerator.is_main_process and metrics_tracker:
-                        # Update enhanced metrics tracker
-                        metrics_tracker.update({
-                            'loss': avg_loss,
-                            'learning_rate': current_lr,
-                            'grad_norm': grad_norm,
-                            'perplexity': perplexity,
-                            'batch_size': config.per_device_train_batch_size * accelerator.num_processes,
-                        }, completed_steps)
-                        
-                        # Print log
-                        log_str = format_metrics_log(
-                            step=completed_steps,
-                            epoch=epoch,
-                            loss=avg_loss,
-                            learning_rate=current_lr,
-                            grad_norm=grad_norm,
-                            perplexity=perplexity,
-                            files_processed=current_files,
-                            tokens_processed=tokens_processed
-                        )
-                        tqdm.write(log_str)
-                
-                # Save checkpoint
-                should_save = (
-                    completed_steps % config.save_steps == 0 or
-                    (current_files > files_processed and current_files % config.checkpoint_every_n_files == 0)
-                )
-                
-                if should_save:
-                    if accelerator.is_main_process:
-                        print(f"\nSaving checkpoint at step {completed_steps}, files {current_files}...")
-                    
-                    checkpoint_manager.save_checkpoint(
-                        accelerator=accelerator,
-                        model=model,
-                        optimizer=optimizer,
-                        scheduler=lr_scheduler,
-                        epoch=epoch,
-                        step=completed_steps,
-                        files_processed=current_files,
-                        metadata={
-                            'model_config': model_config.to_dict(),
-                            'training_config': config.__dict__,
-                        }
-                    )
-                    files_processed = current_files
-                
-                # Update progress bar
                 progress_bar.update(1)
                 
-                # Check if we've reached max steps
-                if completed_steps >= max_steps:
+                # Log progress
+                if completed_steps % config.logging_steps == 0:
+                    avg_loss = total_loss / config.logging_steps
+                    total_loss = 0.0
+                    
                     if accelerator.is_main_process:
-                        print(f"\nReached maximum steps ({max_steps}). Stopping training.")
+                        current_lr = lr_scheduler.get_last_lr()[0]
+                        print(f"Step {completed_steps}: loss={avg_loss:.4f}, lr={current_lr:.2e}")
+                
+                # Save checkpoint
+                if completed_steps % config.save_steps == 0:
+                    if accelerator.is_main_process:
+                        print(f"💾 Saving checkpoint at step {completed_steps}")
+                        checkpoint_manager.save_checkpoint(
+                            accelerator, model, optimizer, lr_scheduler,
+                            epoch, completed_steps, completed_steps // len(train_dataloader)
+                        )
+                
+                # Check if done
+                if completed_steps >= config.max_steps:
                     break
-            
-            # Start timing next iteration
-            step_start_time = time.time()
         
-        if completed_steps >= max_steps:
+        if completed_steps >= config.max_steps:
             break
     
     # Final checkpoint
     if accelerator.is_main_process:
-        print("\nTraining complete! Saving final checkpoint...")
+        print("✅ Training complete! Saving final checkpoint...")
         checkpoint_manager.save_checkpoint(
-            accelerator=accelerator,
-            model=model,
-            optimizer=optimizer,
-            scheduler=lr_scheduler,
-            epoch=epoch,
-            step=completed_steps,
-            files_processed=files_processed,
-            metadata={
-                'model_config': model_config.to_dict(),
-                'training_config': config.__dict__,
-            }
+            accelerator, model, optimizer, lr_scheduler,
+            epoch, completed_steps, completed_steps // len(train_dataloader)
         )
-        
-        if metrics_tracker:
-            metrics_tracker.close()
-        print("Training finished successfully!")
 
 
 if __name__ == "__main__":

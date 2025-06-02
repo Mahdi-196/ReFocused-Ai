@@ -1,14 +1,12 @@
 """
-Configuration module for ReFocused-AI training
+Configuration package for ReFocused-AI training
 """
 
-from .model_config import get_model_config, calculate_params
-from .training_config import TrainingConfig, get_test_config, get_production_config
+from .model_config import get_model_config
+from .training_config import get_training_config, TrainingConfig
 
 __all__ = [
     'get_model_config',
-    'calculate_params',
+    'get_training_config', 
     'TrainingConfig',
-    'get_test_config',
-    'get_production_config'
 ] 

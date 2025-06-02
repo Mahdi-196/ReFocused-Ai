@@ -1,253 +1,224 @@
 # ReFocused-AI Model Training
 
-Optimized training pipeline for the ReFocused-AI 1.2B parameter model with advanced preprocessing, monitoring, and performance optimizations.
+Simple, clean training setup for the ReFocused-AI 1.2B parameter language model.
 
-## 🚀 Key Optimizations
+## 🚀 Quick Start
 
-### Data Preprocessing Optimizations
-- **Flatten Once Per File**: Data is flattened and cached once per file, eliminating repeated processing
-- **Preprocessing Cache**: Preprocessed data is saved to disk (`./preprocessed_cache/`) to avoid recomputation
-- **Optimized Dataset**: Uses `OptimizedTokenizedDataset` for faster data loading
-- **Efficient Batching**: Eliminates on-the-fly reshaping with pre-shaped sequences
+1. **Setup environment:**
+   ```bash
+   bash setup.sh
+   ```
 
-### Performance Monitoring
-- **Enhanced Metrics Tracker**: Detailed performance monitoring with system metrics
-- **Real-time Monitor**: Live training progress monitoring with `monitor_training.py`
-- **Performance Profiling**: Optional I/O and computation profiling
-- **System Monitoring**: CPU, memory, GPU, and disk usage tracking
+2. **Activate environment:**
+   ```bash
+   source venv/bin/activate      # Linux/Mac
+   source venv/Scripts/activate  # Windows
+   ```
 
-### Training Optimizations
-- **Step Limiting**: Configurable step limits for quick test runs
-- **FSDP Support**: Fully Sharded Data Parallel for large models
-- **Memory Efficiency**: Gradient checkpointing and mixed precision training
-- **Smart Checkpointing**: Checkpoint on file completion and step intervals
+3. **Start training:**
+   ```bash
+   python train.py --config test
+   # or
+   bash run.sh test
+   ```
 
-## 📁 Directory Structure
+## 📁 File Structure
 
 ```
 05_model_training/
-├── configs/               # Training configurations
-│   ├── model_config.py   # Model architecture settings  
-│   └── training_config.py # Training hyperparameters
-├── utils/                 # Utility modules
-│   ├── data_utils.py     # Optimized data loading
-│   ├── training_utils.py # Enhanced metrics tracking
-│   └── checkpoint_utils.py # Checkpoint management
-├── scripts/              # Helper scripts
-│   └── monitor_training.py # Real-time monitoring
 ├── train.py              # Main training script
-├── test_dataloader.py    # Dataloader testing
-└── run_optimized_training.sh # Training launcher
+├── setup.sh              # Environment setup
+├── run.sh                # Training launcher
+├── debug_gpu.py          # GPU diagnostics
+├── configs/              # Training configurations
+│   ├── model_config.py   # Model architecture (1.2B params)
+│   └── training_config.py # Training hyperparameters
+├── utils/                # Utility functions
+│   ├── data_utils.py     # Data loading and preprocessing
+│   ├── checkpoint_utils.py # Model checkpointing
+│   └── training_utils.py # Training utilities
+├── checkpoints/          # Saved model checkpoints
+├── logs/                 # Training logs
+└── cache/                # Data cache
 ```
 
-## 🏋️ Quick Start
+## 🔧 Core Files Explained
 
-### Test Run (Recommended)
-```bash
-# Run optimized test training (100 steps, 25 files)
-./run_optimized_training.sh test
+### **train.py**
+Main training script. Handles:
+- Model initialization (GPT-NeoX 1.2B)
+- Data loading from Google Cloud Storage
+- Training loop with gradient accumulation
+- Automatic checkpointing
+- GPU/CPU compatibility
 
-# With profiling enabled
-./run_optimized_training.sh test true
+### **configs/model_config.py**
+Defines the model architecture:
+- 1.2B parameters
+- 24 transformer layers
+- 2048 hidden size
+- 16 attention heads
+- 2048 sequence length
 
-# With custom step limit
-./run_optimized_training.sh test false 50
-```
+### **configs/training_config.py**
+Training configurations:
+- **Test config**: 5 files, 100 steps, quick testing
+- **Production config**: All files, 10K steps, full training
 
-### Production Training
-```bash
-# Full production training
-./run_optimized_training.sh production
+### **utils/data_utils.py**
+Data handling:
+- Downloads NPZ files from Google Cloud Storage
+- Preprocesses and tokenizes text data
+- Creates PyTorch DataLoaders
+- Handles batching and sequence padding
 
-# With monitoring
-START_MONITOR=true ./run_optimized_training.sh production
-```
+### **utils/checkpoint_utils.py**
+Model checkpointing:
+- Saves model state to local disk
+- Uploads checkpoints to Google Cloud Storage
+- Handles checkpoint resuming
+- Manages storage cleanup
 
-### Manual Training
-```bash
-# Test mode with all optimizations
-python train.py --mode test --profile --max-steps 100
+## ⚙️ Configuration Options
 
-# Production mode
-python train.py --mode production
-```
-
-## 📊 Monitoring
-
-### Real-time Monitoring
-```bash
-# Start live monitor (refreshes every 10 seconds)
-python scripts/monitor_training.py
-
-# Custom refresh rate
-python scripts/monitor_training.py --refresh 5
-
-# One-time status check
-python scripts/monitor_training.py --once
-```
-
-### Monitoring Features
-- **Preprocessing Status**: Cache status and file counts
-- **Training Metrics**: Loss, learning rate, gradient norms, perplexity
-- **Performance Metrics**: Timing statistics, throughput, I/O performance
-- **System Status**: CPU, memory, GPU usage
-- **Training Summary**: Run statistics and completion status
-
-## ⚙️ Configuration
-
-### Test Configuration (`get_test_config()`)
-- Files: 25 training files
-- Batch size: 2 per device
-- Steps: Limited to 100 for quick testing
-- Optimizations: All enabled
-- Monitoring: Detailed monitoring and profiling enabled
-
-### Production Configuration (`get_production_config()`)
-- Files: All available training files
-- Batch size: 4 per device
-- Steps: Unlimited (full training)
-- Optimizations: Enabled but minimal monitoring overhead
-
-### Key Settings
+### Test Configuration
 ```python
-# Enable preprocessing optimizations
-use_optimized_dataset = True
-preprocess_cache_dir = "./preprocessed_cache"
-
-# Performance monitoring
-enable_profiling = True  # I/O and computation profiling
-detailed_monitoring = True  # System and stability metrics
-
-# Test run limitations
-max_test_steps = 100  # Limit steps for test runs
+max_train_files=5        # Small dataset
+max_steps=100           # Quick test
+batch_size=1            # Small batches
+save_steps=50           # Frequent saves
 ```
 
-## 🔧 Testing
+### Production Configuration  
+```python
+max_train_files=None    # Full dataset
+max_steps=10000         # Full training
+batch_size=4            # Larger batches
+save_steps=500          # Less frequent saves
+```
 
-### Test Dataloader Performance
+## 🖥️ Hardware Requirements
+
+### Minimum (CPU)
+- 16GB RAM
+- 50GB disk space
+- Training will be very slow
+
+### Recommended (GPU)
+- NVIDIA GPU with 8GB+ VRAM
+- 32GB RAM
+- 100GB disk space
+- CUDA 12.1 compatible
+
+## 📊 Training Commands
+
+### Basic Training
 ```bash
-python test_dataloader.py
+# Test run (100 steps)
+python train.py --config test
+
+# Production run (10K steps) 
+python train.py --config production
+
+# Custom step limit
+python train.py --config test --max-steps 50
 ```
 
-This will:
-- Test preprocessing cache performance
-- Validate tensor shapes and dtypes
-- Compare optimized vs legacy data loading
-- Measure setup and batch processing times
-
-### Expected Performance Improvements
-- **Setup Time**: 2-10x faster after first preprocessing
-- **Batch Loading**: Minimal reshaping overhead
-- **Memory Usage**: Reduced due to preprocessing cache
-- **I/O Efficiency**: Cached preprocessed data reduces disk reads
-
-## 📈 Performance Metrics
-
-### Tracked Metrics
-- **Training**: Loss, learning rate, gradient norms, perplexity
-- **Speed**: Samples/second, step time, throughput
-- **Performance**: Data loading time, forward/backward pass timing
-- **System**: CPU/memory/GPU usage, disk I/O
-- **Stability**: Loss variance, gradient norm variance, training trends
-
-### TensorBoard Integration
-All metrics are automatically logged to TensorBoard:
+### Using the Run Script
 ```bash
-tensorboard --logdir logs/
+# Test configuration
+bash run.sh test
+
+# Production with custom steps
+bash run.sh production 5000
 ```
 
-## 🐛 Troubleshooting
+## 🔍 Troubleshooting
+
+### Check GPU Status
+```bash
+python debug_gpu.py
+```
+
+This will check:
+- NVIDIA drivers installation
+- PyTorch CUDA compatibility
+- GPU memory and capabilities
+- Common configuration issues
 
 ### Common Issues
 
-**Preprocessing Cache Issues**
+**No GPU detected:**
+- Install NVIDIA drivers
+- Install CUDA-enabled PyTorch
+- Check VM GPU passthrough (if in VM)
+
+**Out of memory:**
+- Reduce batch size in config
+- Use test config instead of production
+- Enable gradient checkpointing
+
+**Data loading errors:**
+- Check Google Cloud Storage access
+- Verify bucket permissions
+- Check internet connection
+
+## 📈 Monitoring Training
+
+### View Progress
+Training progress is displayed in the terminal with:
+- Current step and loss
+- Learning rate
+- Training speed
+
+### TensorBoard (Optional)
 ```bash
-# Clear preprocessing cache if corrupted
-rm -rf preprocessed_cache/
+pip install tensorboard
+tensorboard --logdir logs/
 ```
 
-**Memory Issues**
-- Reduce `per_device_train_batch_size`
-- Enable `gradient_checkpointing`
-- Use smaller `max_train_files` for testing
+### Checkpoints
+- Saved every 50-500 steps (configurable)
+- Located in `checkpoints/` directory
+- Automatically uploaded to Google Cloud Storage
+- Can resume training from any checkpoint
 
-**Performance Issues**
-- Check if `use_optimized_dataset=True`
-- Verify preprocessing cache is being used
-- Monitor I/O performance with profiling
+## 🛠️ Development
 
-### Debug Mode
-```bash
-# Run with detailed debugging
-python train.py --mode test --profile --max-steps 10
+### Adding New Configurations
+Edit `configs/training_config.py`:
+```python
+def get_training_config(config_type: str):
+    if config_type == "my_custom_config":
+        return TrainingConfig(
+            max_steps=1000,
+            per_device_train_batch_size=2,
+            # ... other settings
+        )
 ```
 
-## 🔄 Preprocessing Pipeline
+### Modifying Model Architecture
+Edit `configs/model_config.py` to change:
+- Model size (hidden_size, num_layers)
+- Sequence length (max_position_embeddings)
+- Vocabulary size
 
-### First Run (Cold Start)
-1. Downloads NPZ files from GCS to `./cache/`
-2. Loads and flattens each NPZ file
-3. Pre-creates all sequences for each file
-4. Saves preprocessed data to `./preprocessed_cache/`
-5. Builds optimized dataset index
+### Custom Data Processing
+Modify `utils/data_utils.py` for:
+- Different data formats
+- Custom preprocessing
+- Alternative data sources
 
-### Subsequent Runs (Warm Start)
-1. Checks for existing preprocessed cache
-2. Loads preprocessed data directly (much faster)
-3. Builds dataset index from cached data
-4. Ready for training with minimal preprocessing overhead
+## 📋 Dependencies
 
-### Cache Management
-- **Location**: `./preprocessed_cache/`
-- **Format**: Pickle files with metadata
-- **Invalidation**: Automatic if sequence length or stride changes
-- **Cleanup**: Manual removal when needed
+**Core Requirements:**
+- Python 3.8+
+- PyTorch 2.0+ with CUDA
+- Transformers 4.36+
+- Accelerate 0.25+
 
-## 📋 Command Reference
+**Full list in setup.sh**
 
-### Training Commands
-```bash
-# Quick test with profiling
-python train.py --mode test --profile --max-steps 50
+---
 
-# Resume from checkpoint
-python train.py --mode production --resume checkpoint_name
-
-# Custom configuration
-python train.py --mode test --max-steps 200 --profile
-```
-
-### Monitoring Commands
-```bash
-# Live monitoring
-python scripts/monitor_training.py
-
-# Background monitoring
-python scripts/monitor_training.py --refresh 30 &
-
-# Check preprocessing status
-python scripts/monitor_training.py --once
-```
-
-### Utility Commands
-```bash
-# Test dataloader performance
-python test_dataloader.py
-
-# Clear caches
-rm -rf cache/ preprocessed_cache/
-
-# Check system requirements
-python -c "import torch; print('CUDA:', torch.cuda.is_available())"
-```
-
-## 🎯 Best Practices
-
-1. **Always test first**: Run test mode before production training
-2. **Monitor actively**: Use the monitoring script during training
-3. **Check preprocessing**: Verify cache is working with test script
-4. **Resource management**: Monitor GPU memory and adjust batch sizes
-5. **Regular checkpoints**: Use automatic checkpointing for long runs
-6. **Profile periodically**: Enable profiling to identify bottlenecks
-
-This optimized training pipeline significantly reduces preprocessing overhead while providing comprehensive monitoring and debugging capabilities. 
+**Need help?** Run `python debug_gpu.py` to diagnose issues or check the troubleshooting section above. 
