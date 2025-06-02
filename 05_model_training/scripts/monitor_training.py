@@ -18,9 +18,15 @@ import numpy as np
 sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
 try:
+    from torch.utils.tensorboard import SummaryWriter
+    EventFileWriter = None
+except ImportError:
+    from tensorboardX import SummaryWriter
+    EventFileWriter = None
+
+try:
     import psutil
     import torch
-    from torch.utils.tensorboard.backend.event_processing.event_accumulator import EventAccumulator
 except ImportError as e:
     print(f"Missing dependency: {e}")
     print("Please install: pip install psutil torch tensorboard")
@@ -116,30 +122,31 @@ class TrainingMonitor:
             return {}
         
         try:
+            # TODO: EventAccumulator functionality removed - implement alternative method
             # Find the latest event file
-            event_files = list(tb_dir.glob("events.out.tfevents.*"))
-            if not event_files:
-                return {}
+            # event_files = list(tb_dir.glob("events.out.tfevents.*"))
+            # if not event_files:
+            #     return {}
             
-            latest_event = max(event_files, key=lambda x: x.stat().st_mtime)
+            # latest_event = max(event_files, key=lambda x: x.stat().st_mtime)
             
             # Read tensorboard events
-            ea = EventAccumulator(str(latest_event))
-            ea.Reload()
+            # ea = EventAccumulator(str(latest_event))
+            # ea.Reload()
             
             metrics = {}
             
             # Get scalar summaries
-            scalar_tags = ea.Tags()['scalars']
-            for tag in scalar_tags:
-                try:
-                    scalar_events = ea.Scalars(tag)
-                    if scalar_events:
-                        latest_value = scalar_events[-1].value
-                        latest_step = scalar_events[-1].step
-                        metrics[tag] = {'value': latest_value, 'step': latest_step}
-                except:
-                    continue
+            # scalar_tags = ea.Tags()['scalars']
+            # for tag in scalar_tags:
+            #     try:
+            #         scalar_events = ea.Scalars(tag)
+            #         if scalar_events:
+            #             latest_value = scalar_events[-1].value
+            #             latest_step = scalar_events[-1].step
+            #             metrics[tag] = {'value': latest_value, 'step': latest_step}
+            #     except:
+            #         continue
             
             return metrics
         
