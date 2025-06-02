@@ -26,6 +26,9 @@ class TrainingConfig:
     weight_decay: float = 0.1
     max_grad_norm: float = 1.0
     
+    # Data loading
+    dataloader_num_workers: int = 4  # Number of parallel data loading workers
+    
     # Mixed precision
     bf16: bool = True  # Use BF16 if GPU supports it
     
