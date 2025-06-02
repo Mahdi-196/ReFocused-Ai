@@ -23,14 +23,9 @@ class CheckpointManager:
         self.local_dir = local_dir
         os.makedirs(local_dir, exist_ok=True)
         
-        # Initialize GCS client with credentials if available
-        try:
-            self.client = storage.Client()
-        except:
-            # Fall back to anonymous client if no credentials
-            print("Using anonymous GCS client - uploads may fail")
-            self.client = storage.Client.create_anonymous_client()
-        
+        # Use anonymous client to skip credential lookups entirely
+        print("Using anonymous GCS client for checkpoint uploads")
+        self.client = storage.Client.create_anonymous_client()
         self.bucket = self.client.bucket(bucket_name)
     
     def save_checkpoint(self,
