@@ -86,8 +86,8 @@ def get_test_config():
         max_train_files=25,
         per_device_train_batch_size=2,  # Smaller for testing
         gradient_accumulation_steps=4,   # Effective batch = 8
-        save_steps=500,
-        checkpoint_every_n_files=5,
+        save_steps=50,  # Save every 50 steps instead of 500
+        checkpoint_every_n_files=2,  # Save every 2 files instead of 5
         logging_steps=5,
         run_name="test_run_25_files",
         # Test-specific optimizations
