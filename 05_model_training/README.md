@@ -14,6 +14,95 @@
 
 ---
 
+## ✅ Setup Checklist
+
+### Prerequisites
+Before starting, ensure you have:
+
+#### System Requirements
+- [ ] **Python 3.8+** installed (`python --version`)
+- [ ] **pip** package manager installed (`pip --version`)
+- [ ] **Git** installed (`git --version`)
+
+#### Hardware Requirements
+- [ ] **GPU (Recommended)**: NVIDIA GPU with 8GB+ VRAM (`nvidia-smi`)
+- [ ] **CPU Alternative**: 16GB+ RAM (training will be very slow)
+- [ ] **Storage**: 10GB+ free space
+
+#### CUDA Setup (GPU Users)
+- [ ] **CUDA 12.1** compatible drivers installed
+- [ ] **nvidia-smi** command working
+- [ ] GPU memory shows correctly
+
+### Quick Setup
+Run the automated setup script:
+```bash
+# One command setup (recommended)
+./setup.sh
+```
+
+### Manual Verification
+After setup, verify everything is working:
+
+```bash
+# Test core imports
+python -c "
+import torch
+import transformers
+import accelerate
+from google.cloud import storage
+print('✅ All imports successful')
+print(f'CUDA: {torch.cuda.is_available()}')
+"
+
+# Test configurations
+python -c "
+from configs.training_config import get_training_config
+test = get_training_config('test')
+prod = get_training_config('production')
+print(f'Test: batch={test.per_device_train_batch_size}, grad_acc={test.gradient_accumulation_steps}')
+print(f'Prod: batch={prod.per_device_train_batch_size}, grad_acc={prod.gradient_accumulation_steps}')
+print('✅ Configs loaded successfully')
+"
+
+# Run validation tests
+python test_cpu_optimizations.py     # CPU-safe tests
+python test_optimizations.py         # GPU tests (if available)
+```
+
+### Authentication Setup
+- [ ] **Service account key** downloaded from Google Cloud
+- [ ] Key file placed in `credentials/` folder  
+- [ ] Named: `black-dragon-461023-t5-93452a49f86b.json`
+- [ ] Environment variables set:
+  ```bash
+  export GOOGLE_APPLICATION_CREDENTIALS="./credentials/black-dragon-461023-t5-93452a49f86b.json"
+  export GOOGLE_CLOUD_PROJECT="black-dragon-461023-t5"
+  ```
+
+### Data Download
+```bash
+# Download training data
+python download_training_data.py
+```
+- [ ] All .npz files downloaded
+- [ ] `data_info.json` created
+- [ ] No download errors
+
+### Ready to Train!
+```bash
+# Quick test
+python train.py --config test
+
+# Expected results:
+# ✅ Training starts without errors
+# ✅ Shows steps/second > 0.1
+# ✅ GPU utilization > 50% (if GPU)
+# ✅ No memory errors
+```
+
+---
+
 ## 📊 Performance Improvements Summary
 
 | Optimization | Before | After | Improvement |
@@ -727,10 +816,12 @@ df -h  # Check available space
 │
 ├── test_optimizations.py      # GPU performance validation (343 lines)
 ├── test_cpu_optimizations.py  # CPU-compatible tests (313 lines)
-├── run_optimized_training.sh  # Interactive training guide (156 lines)
+├── setup.sh                   # Complete automated setup script
+├── start_training.sh          # Interactive training launcher
+├── download_training_data.py  # Automated data download
+├── debug_gpu.py              # GPU debugging utilities
 │
 ├── PERFORMANCE_OPTIMIZATIONS.md  # Technical optimization details
-├── QUICK_START_OPTIMIZED.md     # Quick reference guide
 └── README.md                    # This comprehensive guide
 ```
 
@@ -830,7 +921,7 @@ Production (10K):      2-4 hours (depending on hardware)
 ### Support and Monitoring
 - **Real-time monitoring**: Watch the steps/second metric during training
 - **Performance validation**: Run `python test_optimizations.py` anytime
-- **Interactive guide**: Use `./run_optimized_training.sh` for guided setup
+- **Interactive training**: Use `./start_training.sh` for guided training setup
 - **Troubleshooting**: Check the comprehensive troubleshooting section above
 
 The ReFocused-AI training system represents the current state-of-the-art in efficient transformer training, combining advanced optimizations with production-ready reliability and monitoring. 
