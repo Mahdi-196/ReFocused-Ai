@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """
 Clean training script for ReFocused-AI 1.2B model
+Enhanced with performance optimizations for H100 GPU utilization
 """
 
 import os
@@ -14,6 +15,11 @@ import argparse
 from tqdm import tqdm
 import time
 import numpy as np
+import torch.backends.cudnn as cudnn
+
+# Enable cuDNN benchmark and deterministic settings for performance
+cudnn.benchmark = True
+cudnn.deterministic = False
 
 # Add project root to path
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -33,16 +39,38 @@ def signal_handler(signum, frame):
 
 
 def check_gpu():
-    """Quick GPU check"""
+    """Quick GPU check with optimization recommendations"""
     print(f"🔥 GPU Status:")
     print(f"  CUDA available: {torch.cuda.is_available()}")
     if torch.cuda.is_available():
         print(f"  GPU count: {torch.cuda.device_count()}")
         for i in range(torch.cuda.device_count()):
-            print(f"  GPU {i}: {torch.cuda.get_device_name(i)}")
+            name = torch.cuda.get_device_name(i)
+            print(f"  GPU {i}: {name}")
+            if "H100" in name or "A100" in name:
+                print(f"    ⚡ High-performance GPU detected - bf16 recommended")
+            elif "V100" in name or "RTX" in name:
+                print(f"    ⚡ Modern GPU detected - fp16/bf16 available")
     else:
         print("  ⚠️  Running on CPU - training will be slow")
     return torch.cuda.is_available()
+
+
+def optimize_model(model, config):
+    """Apply model optimizations based on configuration"""
+    optimized_model = model
+    
+    # Apply torch.compile if available and requested (PyTorch 2.0+)
+    if getattr(config, 'compile_model', False) and hasattr(torch, 'compile'):
+        print("🚀 Applying torch.compile for performance optimization...")
+        try:
+            optimized_model = torch.compile(model)
+            print("✅ Model compilation successful")
+        except Exception as e:
+            print(f"⚠️  Model compilation failed: {e}")
+            optimized_model = model
+    
+    return optimized_model
 
 
 def main():
@@ -57,6 +85,8 @@ def main():
                        help="Resume from checkpoint")
     parser.add_argument("--no-background-upload", action="store_true",
                        help="Disable background uploads (training will block on uploads)")
+    parser.add_argument("--mixed-precision", type=str, choices=["no", "fp16", "bf16"], 
+                       default=None, help="Override mixed precision setting")
     args = parser.parse_args()
     
     # Set up signal handlers for graceful shutdown
@@ -66,7 +96,7 @@ def main():
     # Check GPU status
     cuda_available = check_gpu()
     
-    # Set seed
+    # Set seed for reproducibility
     set_seed(42)
     
     # Load configuration
@@ -74,20 +104,37 @@ def main():
     if args.max_steps:
         config.max_steps = args.max_steps
     
-    print(f"\n🚀 Starting {args.config.upper()} training")
+    # Determine mixed precision setting
+    mixed_precision = "no"
+    if cuda_available:
+        if args.mixed_precision:
+            mixed_precision = args.mixed_precision
+        elif getattr(config, 'bf16', False):
+            mixed_precision = "bf16"
+        elif getattr(config, 'fp16', False):
+            mixed_precision = "fp16"
+    
+    print(f"\n🚀 Starting {args.config.upper()} training with optimizations")
     print(f"  Max steps: {config.max_steps}")
-    print(f"  Batch size: {config.per_device_train_batch_size}")
+    print(f"  Batch size per device: {config.per_device_train_batch_size}")
+    print(f"  Gradient accumulation steps: {getattr(config, 'gradient_accumulation_steps', 1)}")
+    effective_batch = config.per_device_train_batch_size * getattr(config, 'gradient_accumulation_steps', 1)
+    print(f"  Effective batch size: {effective_batch}")
     print(f"  Learning rate: {config.learning_rate}")
+    print(f"  Mixed precision: {mixed_precision}")
     print(f"  Background uploads: {not args.no_background_upload}")
     
-    # Initialize accelerator
+    # Initialize accelerator with optimized settings
     accelerator = Accelerator(
-        gradient_accumulation_steps=config.gradient_accumulation_steps,
-        mixed_precision="bf16" if config.bf16 and cuda_available else "no",
+        gradient_accumulation_steps=getattr(config, 'gradient_accumulation_steps', 1),
+        mixed_precision=mixed_precision,
+        cpu=False,  # Ensure GPU usage
     )
     
     print(f"  Device: {accelerator.device}")
-    print(f"  Mixed precision: {accelerator.mixed_precision}")
+    print(f"  Process index: {accelerator.process_index}")
+    print(f"  Local process index: {accelerator.local_process_index}")
+    print(f"  Num processes: {accelerator.num_processes}")
     
     # Create directories
     os.makedirs(config.output_dir, exist_ok=True)
@@ -101,19 +148,23 @@ def main():
         param_count = count_parameters(model)
         print(f"  Model parameters: {param_count/1e9:.2f}B")
     
-    # Create optimizer
+    # Apply model optimizations
+    model = optimize_model(model, config)
+    
+    # Create optimizer with optimized settings
     optimizer = AdamW(
         model.parameters(),
         lr=config.learning_rate,
         weight_decay=config.weight_decay,
+        eps=1e-8,  # Stable epsilon for mixed precision
     )
     
-    # Create dataloader
+    # Create optimized dataloader
     train_dataloader, num_files = create_dataloader(config, accelerator)
     print(f"  Training files: {num_files}")
     print(f"  Steps per epoch: {len(train_dataloader)}")
     
-    # Create scheduler
+    # Create scheduler with better placement
     lr_scheduler = get_scheduler(
         "cosine",
         optimizer=optimizer,
@@ -121,7 +172,7 @@ def main():
         num_training_steps=config.max_steps,
     )
     
-    # Prepare for training
+    # Prepare for training with accelerator
     model, optimizer, train_dataloader, lr_scheduler = accelerator.prepare(
         model, optimizer, train_dataloader, lr_scheduler
     )
@@ -134,8 +185,8 @@ def main():
         background_upload=not args.no_background_upload
     )
     
-    # Training loop
-    print(f"\n📈 Starting training...")
+    # Training loop with optimizations
+    print(f"\n📈 Starting optimized training loop...")
     start_time = time.time()
     model.train()
     completed_steps = 0
@@ -147,70 +198,85 @@ def main():
     best_loss = float('inf')
     validation_metrics = {}
     
+    # Optimize progress bar
     progress_bar = tqdm(
         range(config.max_steps),
         desc="Training",
         disable=not accelerator.is_local_main_process,
+        dynamic_ncols=True,
     )
+    
+    # Pre-allocate variables to reduce Python overhead
+    logging_steps = config.logging_steps
+    save_steps = getattr(config, 'save_steps', 500)
+    max_grad_norm = config.max_grad_norm
     
     for epoch in range(100):  # Max 100 epochs
         for step, batch in enumerate(train_dataloader):
             
             with accelerator.accumulate(model):
-                # Forward pass
+                # Forward pass - batch is already on correct device via accelerator.prepare
                 outputs = model(
                     input_ids=batch['input_ids'],
                     attention_mask=batch['attention_mask'],
                     labels=batch['labels'],
                 )
                 loss = outputs.loss
-                current_loss = loss.detach().float().item()
-                total_loss += current_loss
                 
                 # Backward pass
                 accelerator.backward(loss)
                 
-                # Optimizer step
+                # Optimizer step with gradient clipping
                 if accelerator.sync_gradients:
-                    accelerator.clip_grad_norm_(model.parameters(), config.max_grad_norm)
+                    accelerator.clip_grad_norm_(model.parameters(), max_grad_norm)
                 
                 optimizer.step()
-                lr_scheduler.step()
                 optimizer.zero_grad()
             
-            # Update progress
+            # Update progress and metrics (reduced Python overhead)
             if accelerator.sync_gradients:
                 completed_steps += 1
                 progress_bar.update(1)
                 
-                # Track metrics
-                current_lr = lr_scheduler.get_last_lr()[0]
-                learning_rate_history.append(current_lr)
+                # Extract loss value efficiently
+                current_loss = loss.detach().float().item()
+                total_loss += current_loss
+                
+                # Step scheduler outside conditional for optimal placement
+                lr_scheduler.step()
                 
                 # Update best loss
                 if current_loss < best_loss:
                     best_loss = current_loss
                 
-                # Log progress
-                if completed_steps % config.logging_steps == 0:
-                    avg_loss = total_loss / config.logging_steps
+                # Efficient logging (reduced frequency checks)
+                if completed_steps % logging_steps == 0:
+                    avg_loss = total_loss / logging_steps
                     loss_history.append(avg_loss)
                     total_loss = 0.0
                     
+                    # Get learning rate efficiently
+                    current_lr = lr_scheduler.get_last_lr()[0]
+                    learning_rate_history.append(current_lr)
+                    
                     if accelerator.is_main_process:
-                        print(f"Step {completed_steps}: loss={avg_loss:.4f}, lr={current_lr:.2e}, best_loss={best_loss:.4f}")
+                        progress_bar.set_postfix({
+                            'loss': f'{avg_loss:.4f}',
+                            'lr': f'{current_lr:.2e}',
+                            'best': f'{best_loss:.4f}'
+                        })
                         
-                        # Add validation metrics (can be expanded)
+                        # Efficient validation metrics computation
                         validation_metrics = {
                             'current_avg_loss': avg_loss,
-                            'steps_since_best': completed_steps - (loss_history.index(min(loss_history)) + 1) * config.logging_steps if loss_history else 0,
+                            'steps_since_best': completed_steps - (loss_history.index(min(loss_history)) + 1) * logging_steps if loss_history else 0,
                             'loss_trend': 'improving' if len(loss_history) >= 2 and loss_history[-1] < loss_history[-2] else 'stable',
                         }
                 
-                # Save checkpoint with comprehensive state
-                if completed_steps % config.save_steps == 0:
+                # Optimized checkpoint saving (reduced frequency)
+                if completed_steps % save_steps == 0:
                     if accelerator.is_main_process:
-                        print(f"💾 Saving checkpoint at step {completed_steps}")
+                        print(f"\n💾 Saving checkpoint at step {completed_steps}")
                         checkpoint_manager.save_checkpoint(
                             accelerator=accelerator,
                             model=model,
@@ -227,22 +293,30 @@ def main():
                             validation_metrics=validation_metrics.copy(),
                             metadata={
                                 'model_config': model_config.__dict__,
-                                'training_config': config.__dict__
+                                'training_config': config.__dict__,
+                                'optimization_settings': {
+                                    'mixed_precision': mixed_precision,
+                                    'effective_batch_size': effective_batch,
+                                    'cudnn_benchmark': cudnn.benchmark,
+                                }
                             }
                         )
                 
-                # Check if done
+                # Check if training is complete
                 if completed_steps >= config.max_steps:
                     break
         
         if completed_steps >= config.max_steps:
             break
     
-    # Final checkpoint with all accumulated data
+    # Final checkpoint with comprehensive optimization summary
     if accelerator.is_main_process:
-        print("✅ Training complete! Saving final checkpoint...")
+        print("\n✅ Training complete! Saving final checkpoint...")
         
-        # Final validation metrics summary
+        training_time = time.time() - start_time
+        steps_per_second = completed_steps / training_time if training_time > 0 else 0
+        
+        # Final validation metrics summary with performance stats
         final_validation_metrics = {
             **validation_metrics,
             'training_completed': True,
@@ -252,6 +326,9 @@ def main():
             'total_epochs': epoch,
             'average_loss': sum(loss_history) / len(loss_history) if loss_history else current_loss,
             'loss_std': np.std(loss_history) if len(loss_history) > 1 else 0.0,
+            'training_time_seconds': training_time,
+            'steps_per_second': steps_per_second,
+            'effective_batch_size': effective_batch,
         }
         
         checkpoint_manager.save_checkpoint(
@@ -273,13 +350,27 @@ def main():
                 'training_config': config.__dict__,
                 'training_summary': {
                     'completed': True,
-                    'total_time': time.time() - start_time if 'start_time' in locals() else None,
+                    'total_time': training_time,
+                    'performance': {
+                        'steps_per_second': steps_per_second,
+                        'effective_batch_size': effective_batch,
+                        'mixed_precision': mixed_precision,
+                        'gradient_accumulation': getattr(config, 'gradient_accumulation_steps', 1),
+                    }
                 }
             }
         )
         
+        # Performance summary
+        print(f"\n🎯 Training Performance Summary:")
+        print(f"   Total time: {training_time/3600:.2f} hours")
+        print(f"   Steps per second: {steps_per_second:.2f}")
+        print(f"   Effective batch size: {effective_batch}")
+        print(f"   Mixed precision: {mixed_precision}")
+        print(f"   Best loss achieved: {best_loss:.4f}")
+        
         # Wait for all background uploads to complete
-        print("⏳ Waiting for background uploads to complete...")
+        print("\n⏳ Waiting for background uploads to complete...")
         checkpoint_manager.wait_for_uploads()
         print("🎉 All done! Training and uploads completed successfully.")
 

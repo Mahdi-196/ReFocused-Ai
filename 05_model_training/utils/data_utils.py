@@ -335,14 +335,38 @@ def collate_fn(batch):
 
 
 def create_dataloader(config, accelerator):
-    """Create training dataloader with optimized settings"""
-    # Use 0 workers on Windows to avoid multiprocessing/pickling issues
-    num_workers = 0 if platform.system() == "Windows" else config.dataloader_num_workers
-    if num_workers == 0:
+    """Create training dataloader with optimized settings for maximum performance"""
+    # Determine optimal number of workers based on platform and config
+    if platform.system() == "Windows":
+        # Use 0 workers on Windows to avoid multiprocessing/pickling issues
+        num_workers = 0
         print("🔧 Using single-threaded dataloader (Windows compatibility)")
+    else:
+        # Use configured number of workers on Unix systems
+        num_workers = getattr(config, 'dataloader_num_workers', 4)
+        print(f"🔧 Using {num_workers} dataloader workers")
     
-    # Standard dataset - loads all data into memory
-    print("Using standard TokenizedDataset...")
+    # Determine if we should use pin_memory based on device and config
+    pin_memory = (
+        getattr(config, 'pin_memory', True) and 
+        accelerator.device.type == "cuda"
+    )
+    
+    # Get prefetch factor for better performance
+    prefetch_factor = getattr(config, 'prefetch_factor', 2) if num_workers > 0 else 2
+    
+    # Get drop_last setting for consistent batch sizes
+    drop_last = getattr(config, 'drop_last', True)
+    
+    print(f"🔧 DataLoader settings:")
+    print(f"   - Batch size: {config.per_device_train_batch_size}")
+    print(f"   - Workers: {num_workers}")
+    print(f"   - Pin memory: {pin_memory}")
+    print(f"   - Prefetch factor: {prefetch_factor}")
+    print(f"   - Drop last: {drop_last}")
+    
+    # Use optimized dataset for better performance
+    print("Using optimized SimpleTokenizedDataset...")
     dataset = SimpleTokenizedDataset(
         bucket_name=config.bucket_name,
         file_pattern=config.tokenized_file_pattern,
@@ -350,13 +374,24 @@ def create_dataloader(config, accelerator):
         max_files=config.max_files
     )
     
-    dataloader = DataLoader(
-        dataset,
-        batch_size=config.per_device_train_batch_size,
-        shuffle=True,
-        num_workers=num_workers,
-        pin_memory=True if accelerator.device.type == "cuda" else False
-    )
+    # Create optimized DataLoader
+    dataloader_kwargs = {
+        'dataset': dataset,
+        'batch_size': config.per_device_train_batch_size,
+        'shuffle': True,
+        'num_workers': num_workers,
+        'pin_memory': pin_memory,
+        'drop_last': drop_last,
+    }
+    
+    # Add prefetch_factor only if num_workers > 0 (not supported with num_workers=0)
+    if num_workers > 0:
+        dataloader_kwargs['prefetch_factor'] = prefetch_factor
+    
+    dataloader = DataLoader(**dataloader_kwargs)
+    
+    effective_batch_size = config.per_device_train_batch_size * getattr(config, 'gradient_accumulation_steps', 1)
+    print(f"📊 Effective batch size: {effective_batch_size} (per_device: {config.per_device_train_batch_size} × accumulation: {getattr(config, 'gradient_accumulation_steps', 1)})")
     
     return dataloader, dataset.num_files
 
