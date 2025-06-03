@@ -13,6 +13,7 @@ import random
 import pickle
 import hashlib
 import json
+import platform
 
 
 class GCSDataLoader:
@@ -333,44 +334,153 @@ def collate_fn(batch):
     }
 
 
-def create_dataloader(config, accelerator=None):
-    """Create DataLoader for training"""
-    # Initialize GCS data loader with preprocessed cache directory from config
-    preprocess_cache_dir = getattr(config, 'preprocess_cache_dir', './preprocessed_cache')
-    gcs_loader = GCSDataLoader(config.bucket_name, config.cache_dir, preprocess_cache_dir)
+def create_dataloader(config, accelerator):
+    """Create training dataloader with optimized settings"""
+    # Use 0 workers on Windows to avoid multiprocessing/pickling issues
+    num_workers = 0 if platform.system() == "Windows" else config.dataloader_num_workers
+    if num_workers == 0:
+        print("🔧 Using single-threaded dataloader (Windows compatibility)")
     
-    # List files
-    files = gcs_loader.list_data_files(max_files=config.max_train_files)
+    # Standard dataset - loads all data into memory
+    print("Using standard TokenizedDataset...")
+    dataset = SimpleTokenizedDataset(
+        bucket_name=config.bucket_name,
+        file_pattern=config.tokenized_file_pattern,
+        sequence_length=config.sequence_length,
+        max_files=config.max_files
+    )
     
-    # Choose dataset class based on optimization setting
-    use_optimized = getattr(config, 'use_optimized_dataset', False)
-    
-    if use_optimized:
-        print("Using OptimizedTokenizedDataset with preprocessing cache...")
-        dataset = OptimizedTokenizedDataset(
-            gcs_loader,
-            files,
-            max_length=2048,  # Match model's max position embeddings
-            stride=2048  # No overlap
-        )
-    else:
-        print("Using standard TokenizedDataset...")
-        dataset = TokenizedDataset(
-            gcs_loader,
-            files,
-            max_length=2048,  # Match model's max position embeddings
-            stride=2048  # No overlap
-        )
-    
-    # Create dataloader with custom collate function
     dataloader = DataLoader(
         dataset,
         batch_size=config.per_device_train_batch_size,
         shuffle=True,
-        num_workers=config.dataloader_num_workers,
-        pin_memory=True,
-        drop_last=True,
-        collate_fn=collate_fn  # Use custom collate function
+        num_workers=num_workers,
+        pin_memory=True if accelerator.device.type == "cuda" else False
     )
     
-    return dataloader, len(files) 
+    return dataloader, dataset.num_files
+
+
+class SimpleTokenizedDataset(Dataset):
+    """Simple tokenized dataset that works directly with bucket parameters"""
+    
+    def __init__(self,
+                 bucket_name: str,
+                 file_pattern: str,
+                 sequence_length: int = 1024,
+                 max_files: int = 5):
+        self.bucket_name = bucket_name
+        self.file_pattern = file_pattern
+        self.sequence_length = sequence_length
+        self.max_files = max_files
+        
+        # Initialize GCS client
+        self.client = storage.Client.create_anonymous_client()
+        self.bucket = self.client.bucket(bucket_name)
+        
+        # Find and cache data files
+        self._load_files()
+        
+        # Build sequence index
+        self._build_index()
+    
+    def _load_files(self):
+        """Load list of files matching the pattern"""
+        blobs = self.bucket.list_blobs()
+        self.files = []
+        
+        print(f"🔍 Looking for files matching pattern: {self.file_pattern}")
+        
+        # More flexible pattern matching
+        all_npz_files = []
+        tokenized_files = []
+        
+        for blob in blobs:
+            if blob.name.endswith('.npz'):
+                all_npz_files.append(blob.name)
+                if 'tokenized' in blob.name and 'cleaned' in blob.name:
+                    tokenized_files.append(blob.name)
+                    self.files.append(blob.name)
+                    if self.max_files > 0 and len(self.files) >= self.max_files:
+                        break
+        
+        print(f"📊 Found {len(all_npz_files)} total .npz files")
+        print(f"📊 Found {len(tokenized_files)} tokenized_cleaned files")
+        
+        self.num_files = len(self.files)
+        print(f"✅ Selected {self.num_files} files for training")
+        if self.num_files > 0:
+            print(f"📁 Sample files: {self.files[:3]}")  # Show first 3 files for debugging
+        elif len(all_npz_files) > 0:
+            print(f"🔍 Available .npz files (first 5): {all_npz_files[:5]}")
+        else:
+            print("❌ No .npz files found in bucket")
+    
+    def _build_index(self):
+        """Build index of all sequences"""
+        self.file_indices = []
+        self.start_indices = []
+        self.all_tokens = []
+        
+        print("Building dataset index...")
+        for file_idx, file_name in enumerate(tqdm(self.files)):
+            # Download and load the file
+            local_path = f"./cache/{os.path.basename(file_name)}"
+            os.makedirs("./cache", exist_ok=True)
+            
+            if not os.path.exists(local_path):
+                print(f"Downloading {file_name}...")
+                blob = self.bucket.blob(file_name)
+                blob.download_to_filename(local_path)
+            
+            # Load data
+            data = np.load(local_path)
+            input_ids = data['input_ids']
+            
+            # Handle different shapes
+            if input_ids.ndim > 1:
+                print(f"Loaded data shape before flattening: {input_ids.shape}")
+                input_ids = input_ids.reshape(-1)
+                print(f"Reshaped data to: {input_ids.shape}")
+            
+            # Store the tokens
+            self.all_tokens.append(input_ids)
+            
+            # Create sequence indices
+            num_sequences = max(1, len(input_ids) - self.sequence_length + 1)
+            for start_idx in range(0, len(input_ids) - self.sequence_length + 1, self.sequence_length):
+                self.file_indices.append(file_idx)
+                self.start_indices.append(start_idx)
+        
+        print(f"Total sequences: {len(self.file_indices)}")
+    
+    def __len__(self):
+        return len(self.file_indices)
+    
+    def __getitem__(self, idx):
+        file_idx = self.file_indices[idx]
+        start_idx = self.start_indices[idx]
+        
+        # Get the sequence
+        tokens = self.all_tokens[file_idx]
+        end_idx = start_idx + self.sequence_length
+        
+        # Extract sequence
+        if end_idx <= len(tokens):
+            sequence = tokens[start_idx:end_idx]
+        else:
+            # Pad if necessary
+            sequence = tokens[start_idx:]
+            sequence = np.pad(sequence, (0, self.sequence_length - len(sequence)), 
+                            mode='constant', constant_values=0)
+        
+        # Create input_ids and labels (shifted by 1)
+        input_ids = torch.tensor(sequence[:-1], dtype=torch.long)
+        labels = torch.tensor(sequence[1:], dtype=torch.long)
+        attention_mask = (input_ids != 0).long()
+        
+        return {
+            'input_ids': input_ids,
+            'labels': labels,
+            'attention_mask': attention_mask
+        } 

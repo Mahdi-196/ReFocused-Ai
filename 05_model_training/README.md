@@ -1,6 +1,15 @@
 # ReFocused-AI Model Training
 
-Simple, clean training setup for the ReFocused-AI 1.2B parameter language model.
+## Overview
+Training pipeline for ReFocused-AI 1.2B parameter GPT-NeoX model with automated checkpointing and **background uploads** to Google Cloud Storage.
+
+## Key Features
+- **Clean, focused training script** (~150 lines)
+- **GPT-NeoX 1.2B architecture** (industry standard)
+- **Background checkpoint uploads** (training doesn't block)
+- **Test and production configurations**
+- **Real-time monitoring capabilities**
+- **Automatic checkpoint management**
 
 ## 🚀 Quick Start
 
@@ -221,4 +230,347 @@ Modify `utils/data_utils.py` for:
 
 ---
 
-**Need help?** Run `python debug_gpu.py` to diagnose issues or check the troubleshooting section above. 
+**Need help?** Run `python debug_gpu.py` to diagnose issues or check the troubleshooting section above.
+
+## Enhanced Checkpointing System
+
+### Comprehensive State Saving
+Each checkpoint now includes:
+- **Model state**: Weights and parameters
+- **Optimizer state**: Adam optimizer state, momentum, etc.
+- **Scheduler state**: Learning rate scheduler progress 
+- **Training configuration**: Complete config used for training
+- **Training metrics**: Loss history, learning rates, validation metrics
+- **System information**: CUDA status, mixed precision, device info
+
+### Checkpoint Contents
+```
+checkpoint-epoch0-step50-files0/
+├── pytorch_model.bin          # Model weights (Accelerate format)
+├── optimizer.bin              # Optimizer state
+├── scheduler.bin              # Scheduler state  
+├── scheduler_state.pt         # Explicit scheduler backup
+├── training_config.json       # Complete training configuration
+├── metadata.json              # Comprehensive checkpoint metadata
+├── training_metrics.json      # Training progress and metrics
+└── random_states_0.pkl        # Random state for reproducibility
+```
+
+### Enhanced Metadata
+```json
+{
+  "step": 50,
+  "epoch": 0, 
+  "current_loss": 3.2456,
+  "best_loss": 3.1234,
+  "loss_history": [3.8, 3.6, 3.4, 3.2],
+  "learning_rates": [0.0002, 0.00019, 0.00018],
+  "validation_metrics": {
+    "current_avg_loss": 3.2456,
+    "steps_since_best": 10,
+    "loss_trend": "improving"
+  },
+  "training_progress": {
+    "completed_steps": 50,
+    "total_epochs": 0,
+    "files_processed": 0
+  },
+  "system_info": {
+    "cuda_available": false,
+    "device_count": 0,
+    "mixed_precision": "no"
+  }
+}
+```
+
+### Checkpoint Management Tools
+
+#### View Checkpoint Details
+```bash
+# List all checkpoints with summary
+python scripts/checkpoint_viewer.py list
+
+# View detailed checkpoint information
+python scripts/checkpoint_viewer.py view checkpoint-epoch0-step50-files0
+
+# Compare multiple checkpoints
+python scripts/checkpoint_viewer.py compare checkpoint-epoch0-step50-files0 checkpoint-epoch0-step100-files0
+```
+
+#### Plot Training Metrics
+```bash
+# Plot loss and learning rate curves
+python scripts/checkpoint_viewer.py plot checkpoint-epoch0-step50-files0
+
+# Save plot to file
+python scripts/checkpoint_viewer.py plot checkpoint-epoch0-step50-files0 --save training_plot.png
+```
+
+#### Resume Training
+```python
+# Resume from specific checkpoint with full state restoration
+python train.py --config test --resume checkpoint-epoch0-step50-files0
+```
+
+### Training Metrics Tracking
+
+The enhanced system automatically tracks:
+- **Loss History**: Rolling average at each logging interval
+- **Learning Rate Schedule**: Complete LR progression  
+- **Best Loss**: Best loss achieved during training
+- **Validation Metrics**: Extensible validation tracking
+- **Training Progress**: Steps, epochs, files processed
+- **System State**: Hardware and training environment
+
+### Example Checkpoint Output
+```
+💾 Saving checkpoint at step 50
+✅ Saved scheduler state
+✅ Saved training config  
+✅ Saved comprehensive metadata
+✅ Saved training metrics
+🚀 Starting background upload for checkpoint-epoch0-step50-files0
+✅ Checkpoint checkpoint-epoch0-step50-files0 queued for background upload
+```
+
+### Checkpoint Viewer Examples
+
+#### List Checkpoints
+```bash
+$ python scripts/checkpoint_viewer.py list
+📁 Found 3 checkpoints:
+==============================================================================
+ 1. checkpoint-epoch0-step50-files0        Step: 50     Loss: 3.245600   Time: 2024-01-15 14:30:25
+ 2. checkpoint-epoch0-step100-files0       Step: 100    Loss: 2.987543   Time: 2024-01-15 14:35:42  
+ 3. checkpoint-epoch0-step150-files0       Step: 150    Loss: 2.756321   Time: 2024-01-15 14:40:58
+```
+
+#### Detailed View
+```bash
+$ python scripts/checkpoint_viewer.py view checkpoint-epoch0-step50-files0
+
+📊 Checkpoint Summary: checkpoint-epoch0-step50-files0
+============================================================
+📅 Timestamp: 2024-01-15T14:30:25.123456
+🔢 Step: 50
+🔄 Epoch: 0
+📁 Files Processed: 0
+🖥️  CUDA Available: False
+🎮 GPU Count: 0
+⚡ Mixed Precision: no
+
+📈 Training Metrics:
+------------------------------
+💥 Current Loss: 3.245600
+🏆 Best Loss: 3.123400
+📊 Loss History Length: 5
+📉 Average Loss: 3.456789
+📊 Loss Std Dev: 0.234567
+🔄 Loss Trend: ↓
+📈 Current LR: 1.90e-04
+📊 LR History Length: 50
+
+🎯 Validation Metrics:
+------------------------------
+  current_avg_loss: 3.245600
+  steps_since_best: 10
+  loss_trend: improving
+```
+
+## Background Upload System
+
+### How It Works
+- **Parallel uploads**: Training continues while checkpoints upload in background threads
+- **Compressed archives**: Creates tar.gz files for faster, single-file uploads
+- **gsutil integration**: Uses Google's optimized upload tool with multithreading
+- **Graceful shutdown**: Waits for uploads to complete if training is interrupted
+
+### Upload Modes
+```bash
+# Default: Background uploads (recommended)
+python train.py --config test
+
+# Synchronous uploads (blocks training)
+python train.py --config test --no-background-upload
+```
+
+### Upload Management
+
+#### Check Upload Status
+```bash
+python scripts/upload_manager.py status --config test
+```
+
+#### List Local Checkpoints
+```bash
+python scripts/upload_manager.py list
+```
+
+#### Upload Specific Checkpoint
+```bash
+python scripts/upload_manager.py upload checkpoint-epoch0-step50-files0
+```
+
+#### Upload All Local Checkpoints
+```bash
+python scripts/upload_manager.py upload-all --config test
+```
+
+## Configuration
+
+### Test Config (`configs/test.json`)
+```json
+{
+  "max_files": 5,
+  "max_steps": 100,
+  "per_device_train_batch_size": 1,
+  "save_steps": 50,
+  "logging_steps": 10
+}
+```
+
+### Production Config (`configs/production.json`)
+```json
+{
+  "max_files": -1,
+  "max_steps": 10000,
+  "per_device_train_batch_size": 4,
+  "save_steps": 500,
+  "logging_steps": 100
+}
+```
+
+## Model Architecture
+
+```
+ReFocused-AI 1.2B Parameters
+├── 16 transformer layers
+├── 2048 hidden dimensions
+├── 16 attention heads
+├── 50,257 vocabulary size
+└── GPT-NeoX architecture
+```
+
+## File Structure
+
+```
+05_model_training/
+├── train.py              # Main training script
+├── run.sh                # Quick launcher
+├── configs/              # Training configurations
+├── utils/                # Training utilities
+├── scripts/              # Monitoring and management
+├── checkpoints/          # Local checkpoint storage
+└── logs/                 # Training logs
+```
+
+## Command Line Options
+
+```bash
+python train.py [OPTIONS]
+
+Options:
+  --config {test,production}     Training configuration (default: test)
+  --max-steps INT                Override max training steps
+  --resume CHECKPOINT_NAME       Resume from specific checkpoint
+  --no-background-upload         Disable background uploads (blocks training)
+```
+
+## Monitoring
+
+### Real-time Training Monitor
+```bash
+# Monitor with custom refresh rate
+python scripts/monitor_training.py --refresh 3
+
+# Monitor logs only
+python scripts/monitor_training.py --logs-only
+
+# One-time status check
+python scripts/monitor_training.py --once
+```
+
+### Upload Progress
+Training output shows background upload status:
+```
+💾 Saving checkpoint at step 50
+🚀 Starting background upload for checkpoint-epoch0-step50-files0
+✅ Checkpoint checkpoint-epoch0-step50-files0 queued for background upload
+📦 Creating archive: ./checkpoints/checkpoint-epoch0-step50-files0.tar.gz
+☁️  Uploading to gs://refocused-ai/Checkpoints/checkpoint-epoch0-step50-files0.tar.gz
+✅ Successfully uploaded checkpoint-epoch0-step50-files0
+🗑️  Cleaned up ./checkpoints/checkpoint-epoch0-step50-files0.tar.gz
+```
+
+## Google Cloud Storage Integration
+
+### Bucket Structure
+```
+gs://refocused-ai/Checkpoints/
+├── checkpoint-epoch0-step50-files0.tar.gz
+├── checkpoint-epoch0-step100-files0.tar.gz
+└── checkpoint-epoch0-step150-files0.tar.gz
+```
+
+### Authentication
+Uses anonymous GCS client to avoid credential issues. Ensure `gsutil` is configured:
+```bash
+gsutil version  # Should show version info
+```
+
+## Performance Benefits
+
+### Background Uploads
+- **No training interruption**: Uploads happen in parallel threads
+- **Faster uploads**: tar.gz compression + gsutil multithreading
+- **Reduced bandwidth**: Single compressed file vs. multiple small files
+- **Graceful handling**: Automatic cleanup and error handling
+
+### Upload Speed Comparison
+```
+Traditional upload: ~2-5 minutes (blocks training)
+Background upload:  ~30 seconds (returns immediately)
+```
+
+## Troubleshooting
+
+### Upload Issues
+```bash
+# Check gsutil configuration
+gsutil version
+
+# Test bucket access
+gsutil ls gs://refocused-ai/
+
+# Manual upload if needed
+python scripts/upload_manager.py upload-all
+```
+
+### Training Issues
+```bash
+# Check GPU status
+python train.py --config test  # Shows GPU info at startup
+
+# Monitor resource usage
+python scripts/monitor_training.py --refresh 2
+```
+
+### Signal Handling
+Training handles interruption gracefully:
+- `Ctrl+C`: Waits for background uploads to complete
+- `SIGTERM`: Ensures uploads finish before exit
+
+## Best Practices
+
+1. **Use background uploads** (default) for uninterrupted training
+2. **Monitor upload status** with `scripts/upload_manager.py status`
+3. **Check logs regularly** with `scripts/monitor_training.py`
+4. **Keep local checkpoints** limited (automatic cleanup after 3 checkpoints)
+5. **Use test config** for development, production for actual training
+
+## Integration with Main Pipeline
+
+This training module integrates with:
+- `04_data_tokenization/` → Provides tokenized training data
+- `06_monitoring_validation/` → Model validation and metrics
+- Google Cloud Storage → Checkpoint persistence 
