@@ -85,13 +85,6 @@ else
     echo "⚠️  No NVIDIA GPU detected - training will use CPU (very slow)"
 fi
 
-# Check Python packages
-echo "✅ Checking Python environment..."
-python -c "import torch, transformers, accelerate, google.cloud.storage; print('All required packages available')" 2>/dev/null
-if [[ $? -ne 0 ]]; then
-    echo "❌ Missing required packages. Install with: pip install -r requirements.txt"
-    exit 1
-fi
 
 # Start training
 echo ""

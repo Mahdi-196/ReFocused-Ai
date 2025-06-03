@@ -1,34 +1,45 @@
 # ReFocused-AI Model Training
 
 ## Overview
-Training pipeline for ReFocused-AI 1.2B parameter GPT-NeoX model with automated checkpointing and **background uploads** to Google Cloud Storage.
+Training pipeline for ReFocused-AI 1.2B parameter GPT-NeoX model with **authenticated Google Cloud Storage integration** and **background checkpoint uploading**.
 
 ## Key Features
-- **Clean, focused training script** (~150 lines)
 - **GPT-NeoX 1.2B architecture** (industry standard)
+- **Authenticated GCS integration** (service account based)
 - **Background checkpoint uploads** (training doesn't block)
 - **Test and production configurations**
+- **Comprehensive checkpoint management**
 - **Real-time monitoring capabilities**
-- **Automatic checkpoint management**
+- **Enhanced checkpoint metadata and state preservation**
 
 ## 🚀 Quick Start
 
-1. **Setup environment:**
+### Prerequisites
+1. **Python 3.8+** with virtual environment
+2. **Google Cloud service account** with Storage permissions
+3. **NVIDIA GPU** (recommended) or CPU fallback
+
+### Setup & Start Training
+
+1. **Activate virtual environment:**
    ```bash
-   bash setup.sh
+   source ../venv/bin/activate      # Linux/Mac
+   source ../venv/Scripts/activate  # Windows
    ```
 
-2. **Activate environment:**
+2. **Add your service account credentials:**
    ```bash
-   source venv/bin/activate      # Linux/Mac
-   source venv/Scripts/activate  # Windows
+   # Place your service account JSON key in:
+   ./credentials/black-dragon-461023-t5-93452a49f86b.json
    ```
 
 3. **Start training:**
    ```bash
-   python train.py --config test
-   # or
-   bash run.sh test
+   # Quick test (1000 steps, 5 files)
+   ./start_training.sh --config test
+   
+   # Full production training (10000 steps, all files)
+   ./start_training.sh --config production
    ```
 
 ## 📁 File Structure
