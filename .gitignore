@@ -159,4 +159,10 @@ data/*/*.txt
 data/*/*.json
 data/*/*.jsonl
 data/*/*.csv
-data/*/*.parquet 
+data/*/*.parquet
+
+# Google Cloud credentials
+05_model_training/credentials/
+*.json
+*-key.json
+*credentials*.json 

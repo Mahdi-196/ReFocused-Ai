@@ -17,8 +17,8 @@ class CheckpointManager:
     """Manages model checkpoints and uploads to GCS"""
     
     def __init__(self, 
-                 bucket_name: str,
-                 checkpoint_path: str,
+                 bucket_name: str = "refocused-ai",
+                 checkpoint_path: str = "Checkpoints",
                  local_dir: str = "./checkpoints",
                  background_upload: bool = True):
         self.bucket_name = bucket_name
@@ -30,16 +30,18 @@ class CheckpointManager:
         # Track background upload processes
         self.upload_processes = []
         
-        # Don't initialize client here to avoid pickling issues with multiprocessing
-        self.client = None
-        self.bucket = None
+        # Initialize authenticated GCS client with project/credentials
+        # Ensures GOOGLE_APPLICATION_CREDENTIALS and GOOGLE_CLOUD_PROJECT are used
+        self.client = storage.Client()
+        self.bucket = self.client.bucket(bucket_name)
         
-        print("Using anonymous GCS client for checkpoint uploads")
+        print(f"Initialized authenticated GCS client for bucket: {bucket_name}")
     
     def _ensure_client(self):
         """Lazy initialization of GCS client to avoid pickling issues"""
         if self.client is None:
-            self.client = storage.Client.create_anonymous_client()
+            # Use authenticated client instead of anonymous
+            self.client = storage.Client()
             self.bucket = self.client.bucket(self.bucket_name)
     
     def save_checkpoint(self,
@@ -244,7 +246,7 @@ class CheckpointManager:
                 relative_path = os.path.relpath(local_file_path, local_dir)
                 gcs_path = f"{self.checkpoint_path}/{checkpoint_name}/{relative_path}"
                 
-                # Upload file
+                # Upload file with proper prefix
                 blob = self.bucket.blob(gcs_path)
                 blob.upload_from_filename(local_file_path)
         
@@ -343,9 +345,9 @@ class CheckpointManager:
         # Fallback to old directory-based download
         os.makedirs(local_dir, exist_ok=True)
         
-        # Use anonymous client for directory downloads
-        if not hasattr(self, 'client'):
-            self.client = storage.Client.create_anonymous_client()
+        # Use authenticated client for directory downloads
+        if not hasattr(self, 'client') or self.client is None:
+            self.client = storage.Client()
             self.bucket = self.client.bucket(self.bucket_name)
         
         prefix = f"{self.checkpoint_path}/{checkpoint_name}/"
@@ -364,8 +366,8 @@ class CheckpointManager:
     
     def get_latest_checkpoint(self) -> Optional[str]:
         """Find the latest checkpoint in GCS"""
-        if not hasattr(self, 'client'):
-            self.client = storage.Client.create_anonymous_client()
+        if not hasattr(self, 'client') or self.client is None:
+            self.client = storage.Client()
             self.bucket = self.client.bucket(self.bucket_name)
             
         prefix = f"{self.checkpoint_path}/"

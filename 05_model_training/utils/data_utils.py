@@ -27,7 +27,7 @@ class GCSDataLoader:
         os.makedirs(preprocess_cache_dir, exist_ok=True)
         
         # Initialize GCS client
-        self.client = storage.Client.create_anonymous_client()
+        self.client = storage.Client()
         self.bucket = self.client.bucket(bucket_name)
         
         # Cache for flattened data to avoid repeated processing
@@ -375,7 +375,7 @@ class SimpleTokenizedDataset(Dataset):
         self.max_files = max_files
         
         # Initialize GCS client
-        self.client = storage.Client.create_anonymous_client()
+        self.client = storage.Client()
         self.bucket = self.client.bucket(bucket_name)
         
         # Find and cache data files

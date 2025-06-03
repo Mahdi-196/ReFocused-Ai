@@ -54,10 +54,10 @@ def get_training_config(config_type: str = "test") -> TrainingConfig:
     if config_type == "test":
         return TrainingConfig(
             max_files=5,  # Small number for testing
-            max_steps=100,      # Quick test
+            max_steps=1000,     # Increased from 100 to 1000 for more comprehensive training
             per_device_train_batch_size=1,
-            save_steps=50,      # Save every 50 steps
-            logging_steps=10,   # Log every 10 steps
+            save_steps=100,     # Save every 100 steps (was 50)
+            logging_steps=25,   # Log every 25 steps (was 10)
         )
     
     elif config_type == "production":
