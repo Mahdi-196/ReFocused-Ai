@@ -429,15 +429,25 @@ class SimpleTokenizedDataset(Dataset):
         # More flexible pattern matching
         all_npz_files = []
         tokenized_files = []
+        valid_files = []
         
         for blob in blobs:
             if blob.name.endswith('.npz'):
                 all_npz_files.append(blob.name)
                 if 'tokenized' in blob.name and 'cleaned' in blob.name:
                     tokenized_files.append(blob.name)
-                    self.files.append(blob.name)
-                    if self.max_files > 0 and len(self.files) >= self.max_files:
-                        break
+                    
+                    # Quick validation: check if file can be downloaded and has basic structure
+                    try:
+                        # We'll do full validation later in _build_index, just add to list for now
+                        valid_files.append(blob.name)
+                        if self.max_files > 0 and len(valid_files) >= self.max_files:
+                            break
+                    except Exception as e:
+                        print(f"⚠️  Skipping {blob.name} during initial scan: {e}")
+                        continue
+        
+        self.files = valid_files
         
         print(f"📊 Found {len(all_npz_files)} total .npz files")
         print(f"📊 Found {len(tokenized_files)} tokenized_cleaned files")
@@ -458,36 +468,70 @@ class SimpleTokenizedDataset(Dataset):
         self.all_tokens = []
         
         print("Building dataset index...")
-        for file_idx, file_name in enumerate(tqdm(self.files)):
-            # Download and load the file
-            local_path = f"./cache/{os.path.basename(file_name)}"
-            os.makedirs("./cache", exist_ok=True)
-            
-            if not os.path.exists(local_path):
-                print(f"Downloading {file_name}...")
-                blob = self.bucket.blob(file_name)
-                blob.download_to_filename(local_path)
-            
-            # Load data
-            data = np.load(local_path)
-            input_ids = data['input_ids']
-            
-            # Handle different shapes
-            if input_ids.ndim > 1:
-                print(f"Loaded data shape before flattening: {input_ids.shape}")
-                input_ids = input_ids.reshape(-1)
-                print(f"Reshaped data to: {input_ids.shape}")
-            
-            # Store the tokens
-            self.all_tokens.append(input_ids)
-            
-            # Create sequence indices
-            num_sequences = max(1, len(input_ids) - self.sequence_length + 1)
-            for start_idx in range(0, len(input_ids) - self.sequence_length + 1, self.sequence_length):
-                self.file_indices.append(file_idx)
-                self.start_indices.append(start_idx)
+        valid_files = 0
+        skipped_files = 0
         
-        print(f"Total sequences: {len(self.file_indices)}")
+        for file_idx, file_name in enumerate(tqdm(self.files)):
+            try:
+                # Download and load the file
+                local_path = f"./cache/{os.path.basename(file_name)}"
+                os.makedirs("./cache", exist_ok=True)
+                
+                if not os.path.exists(local_path):
+                    print(f"Downloading {file_name}...")
+                    blob = self.bucket.blob(file_name)
+                    blob.download_to_filename(local_path)
+                
+                # Load data with error handling
+                data = np.load(local_path)
+                
+                # Check if 'input_ids' key exists
+                if 'input_ids' not in data:
+                    print(f"⚠️  Skipping {file_name}: Missing 'input_ids' key. Available keys: {list(data.keys())}")
+                    data.close()
+                    skipped_files += 1
+                    continue
+                
+                input_ids = data['input_ids']
+                
+                # Handle different shapes
+                if input_ids.ndim > 1:
+                    print(f"Loaded data shape before flattening: {input_ids.shape}")
+                    input_ids = input_ids.reshape(-1)
+                    print(f"Reshaped data to: {input_ids.shape}")
+                
+                # Validate data is not empty
+                if len(input_ids) == 0:
+                    print(f"⚠️  Skipping {file_name}: Empty input_ids array")
+                    data.close()
+                    skipped_files += 1
+                    continue
+                
+                # Store the tokens
+                self.all_tokens.append(input_ids)
+                
+                # Create sequence indices for this file
+                current_file_idx = len(self.all_tokens) - 1  # Use actual index in all_tokens
+                num_sequences = max(1, len(input_ids) - self.sequence_length + 1)
+                for start_idx in range(0, len(input_ids) - self.sequence_length + 1, self.sequence_length):
+                    self.file_indices.append(current_file_idx)
+                    self.start_indices.append(start_idx)
+                
+                data.close()
+                valid_files += 1
+                
+            except Exception as e:
+                print(f"⚠️  Skipping corrupted file {file_name}: {e}")
+                skipped_files += 1
+                continue
+        
+        print(f"📊 Dataset build complete:")
+        print(f"   ✅ Valid files: {valid_files}")
+        print(f"   ⚠️  Skipped files: {skipped_files}")
+        print(f"   📈 Total sequences: {len(self.file_indices)}")
+        
+        if len(self.file_indices) == 0:
+            raise ValueError("No valid sequences found in any files. Please check your data files.")
     
     def __len__(self):
         return len(self.file_indices)
