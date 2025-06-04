@@ -6,8 +6,17 @@ Enhanced with performance optimizations for H100 GPU utilization
 
 import os
 import sys
+import warnings
+
+# Suppress FutureWarnings from transformers and torch
+warnings.filterwarnings("ignore", category=FutureWarning)
+warnings.filterwarnings("ignore", category=UserWarning)
+
 import torch
 import signal
+
+# Set high precision for float32 matmul (improves H100/A100 performance)
+torch.set_float32_matmul_precision('high')
 from torch.optim import AdamW
 from transformers import GPTNeoXForCausalLM, get_scheduler, set_seed
 from accelerate import Accelerator

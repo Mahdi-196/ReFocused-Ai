@@ -149,6 +149,28 @@ $PIP_CMD install google-cloud-storage==2.13.0
 $PIP_CMD install google-auth==2.22.0
 $PIP_CMD install google-resumable-media==2.5.0
 
+echo "🔧 Installing Google Cloud SDK and gsutil..."
+# Install gsutil for fast checkpoint uploads
+if command -v gsutil &> /dev/null; then
+    echo "✅ gsutil already installed"
+else
+    if [[ "$OS" == "linux" ]] || [[ "$OS" == "mac" ]]; then
+        # For Linux/Mac - install via pip
+        $PIP_CMD install gsutil
+        echo "✅ gsutil installed via pip"
+    elif [[ "$OS" == "windows" ]]; then
+        # For Windows - check if gcloud SDK is available
+        if command -v gcloud &> /dev/null; then
+            echo "✅ Google Cloud SDK detected - gsutil available"
+        else
+            echo -e "${YELLOW}⚠️  gsutil not found on Windows${NC}"
+            echo "   For faster uploads, install Google Cloud SDK from:"
+            echo "   https://cloud.google.com/sdk/docs/install"
+            echo "   Or background uploads will use Python client (slower)"
+        fi
+    fi
+fi
+
 echo "📊 Installing monitoring and utilities..."
 $PIP_CMD install tqdm tensorboard wandb
 $PIP_CMD install numpy>=1.24.0 pandas>=2.0.0

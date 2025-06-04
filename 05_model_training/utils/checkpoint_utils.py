@@ -184,9 +184,10 @@ class CheckpointManager:
     def _background_upload_worker(self, local_dir: str, checkpoint_name: str):
         """Background worker for uploading checkpoint to GCS"""
         try:
-            # Check if gsutil is available
-            gsutil_check = subprocess.run(["which", "gsutil"], capture_output=True, text=True)
-            if gsutil_check.returncode != 0:
+            # Check if gsutil is available (cross-platform)
+            import shutil
+            gsutil_path = shutil.which("gsutil")
+            if gsutil_path is None:
                 print(f"⚠️  gsutil not found, falling back to Python GCS client upload")
                 self._upload_to_gcs(local_dir, checkpoint_name)
                 return

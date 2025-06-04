@@ -528,10 +528,20 @@ class SimpleTokenizedDataset(Dataset):
         print(f"📊 Dataset build complete:")
         print(f"   ✅ Valid files: {valid_files}")
         print(f"   ⚠️  Skipped files: {skipped_files}")
-        print(f"   📈 Total sequences: {len(self.file_indices)}")
+        if skipped_files > 0:
+            skip_percentage = (skipped_files / (valid_files + skipped_files)) * 100
+            print(f"   📈 Skip rate: {skip_percentage:.1f}% (normal for large scraped datasets)")
+        print(f"   📈 Total sequences: {len(self.file_indices):,}")
         
         if len(self.file_indices) == 0:
             raise ValueError("No valid sequences found in any files. Please check your data files.")
+        
+        # Report if significant data skipping occurred
+        if skipped_files > valid_files * 0.3:  # More than 30% skipped
+            print(f"⚠️  High skip rate detected ({skip_percentage:.1f}%). This is normal for scraped datasets.")
+            print(f"   Consider re-running data cleaning if you want to recover more files.")
+        else:
+            print(f"✅ Skip rate is acceptable. Training will continue with {valid_files} files.")
     
     def __len__(self):
         return len(self.file_indices)
