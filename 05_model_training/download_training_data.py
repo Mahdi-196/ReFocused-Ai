@@ -53,12 +53,24 @@ def download_refocused_data():
         downloaded_bytes = 0
         
         for i, blob in enumerate(npz_blobs, 1):
-            filename = blob.name
+            # 1. Build precise local path (preserving any sub-folders)
+            relative_path = Path(blob.name)
+            local_path = data_dir / relative_path
             file_size = blob.size
             
-            local_path = data_dir / filename
+            # Create any intermediate folders (e.g. data/training/subdir1/)
+            local_path.parent.mkdir(parents=True, exist_ok=True)
             
-            print(f"[{i:3d}/{len(npz_blobs)}] {filename} ({file_size/1024/1024:.1f} MB)")
+            # 2. Skip if already downloaded
+            if local_path.exists():
+                print(f"[{i:3d}/{len(npz_blobs)}] ⏭️  Skipping (already exists): {relative_path}")
+                # Still count as "downloaded" for progress tracking
+                downloaded_count += 1
+                downloaded_bytes += file_size
+                continue
+            
+            # 3. Otherwise download into that same nested path
+            print(f"[{i:3d}/{len(npz_blobs)}] ⬇️  Downloading {relative_path} ({file_size/1024/1024:.1f} MB)")
             
             try:
                 # Download file using Google Cloud Storage client
@@ -70,11 +82,11 @@ def download_refocused_data():
                 # Progress update every 10 files
                 if i % 10 == 0:
                     elapsed = time.time() - start_time
-                    speed_mbps = (downloaded_bytes / (1024 * 1024)) / elapsed
+                    speed_mbps = (downloaded_bytes / (1024 * 1024)) / elapsed if elapsed > 0 else 0
                     print(f"    📈 Progress: {i}/{len(npz_blobs)} files, {speed_mbps:.1f} MB/s")
                 
             except Exception as e:
-                print(f"    ❌ Failed to download {filename}: {e}")
+                print(f"    ❌ Failed to download {relative_path}: {e}")
                 continue
         
         # Final summary
@@ -89,10 +101,10 @@ def download_refocused_data():
         print(f"🚀 Average speed: {avg_speed:.1f} MB/s")
         print(f"📁 Files saved to: {data_dir.absolute()}")
         
-        # Verify downloads
+        # Verify downloads (including nested folders)
         print("\n🔍 Verifying downloads...")
-        local_files = list(data_dir.glob("*.npz"))
-        print(f"✅ {len(local_files)} .npz files in local directory")
+        local_files = list(data_dir.glob("**/*.npz"))  # Recursive search
+        print(f"✅ {len(local_files)} .npz files found in directory tree")
         
         if len(local_files) == len(npz_blobs):
             print("🎯 All files downloaded successfully!")
@@ -109,7 +121,7 @@ def download_refocused_data():
 def create_data_info():
     """Create info file about the downloaded data"""
     data_dir = Path("data/training")
-    npz_files = list(data_dir.glob("*.npz"))
+    npz_files = list(data_dir.glob("**/*.npz"))  # Recursive search for nested folders
     
     if not npz_files:
         print("No .npz files found to analyze")

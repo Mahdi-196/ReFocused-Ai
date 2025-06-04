@@ -56,23 +56,6 @@ def check_gpu():
     return torch.cuda.is_available()
 
 
-def optimize_model(model, config):
-    """Apply model optimizations based on configuration"""
-    optimized_model = model
-    
-    # Apply torch.compile if available and requested (PyTorch 2.0+)
-    if getattr(config, 'compile_model', False) and hasattr(torch, 'compile'):
-        print("🚀 Applying torch.compile for performance optimization...")
-        try:
-            optimized_model = torch.compile(model)
-            print("✅ Model compilation successful")
-        except Exception as e:
-            print(f"⚠️  Model compilation failed: {e}")
-            optimized_model = model
-    
-    return optimized_model
-
-
 def main():
     global checkpoint_manager
     
@@ -148,9 +131,6 @@ def main():
         param_count = count_parameters(model)
         print(f"  Model parameters: {param_count/1e9:.2f}B")
     
-    # Apply model optimizations
-    model = optimize_model(model, config)
-    
     # Create optimizer with optimized settings
     optimizer = AdamW(
         model.parameters(),
@@ -176,6 +156,15 @@ def main():
     model, optimizer, train_dataloader, lr_scheduler = accelerator.prepare(
         model, optimizer, train_dataloader, lr_scheduler
     )
+    
+    # Apply torch.compile after accelerator.prepare() for device-aware optimization
+    if getattr(config, 'compile_model', False) and hasattr(torch, 'compile'):
+        print("🚀 Applying torch.compile after accelerator.prepare()...")
+        try:
+            model = torch.compile(model)
+            print("✅ Model compilation successful")
+        except Exception as e:
+            print(f"⚠️  Model compilation failed: {e}")
     
     # Initialize checkpoint manager
     checkpoint_manager = CheckpointManager(

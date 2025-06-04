@@ -72,11 +72,6 @@ if ! command_exists pip && ! command_exists pip3; then
     exit 1
 fi
 
-PIP_CMD="pip"
-if command_exists pip3; then
-    PIP_CMD="pip3"
-fi
-
 echo -e "✅ pip found"
 
 # Check for CUDA
@@ -111,6 +106,9 @@ fi
 
 echo -e "✅ Virtual environment created and activated"
 
+# Set pip command to venv pip (guaranteed to be in venv now)
+PIP_CMD="pip"
+
 # Upgrade pip
 echo "📦 Upgrading pip..."
 $PIP_CMD install --upgrade pip
@@ -127,6 +125,16 @@ else
 fi
 
 echo -e "✅ PyTorch installed"
+
+# Verify PyTorch 2.0+ for torch.compile support
+echo "🔧 Verifying PyTorch version for torch.compile support..."
+if $PYTHON_CMD -c "import torch; import sys; sys.exit(0 if torch.__version__ >= '2.0.0' else 1)"; then
+    echo -e "✅ PyTorch 2.0+ detected - torch.compile available"
+else
+    TORCH_VERSION=$($PYTHON_CMD -c "import torch; print(torch.__version__)")
+    echo -e "${YELLOW}⚠️  PyTorch $TORCH_VERSION detected. torch.compile requires PyTorch 2.0+${NC}"
+    echo -e "${YELLOW}   Model compilation will be disabled but training will work${NC}"
+fi
 
 echo -e "\n${YELLOW}Step 4: Core Dependencies${NC}"
 echo "=========================="
@@ -228,8 +236,34 @@ print(f'cuDNN benchmark enabled: {cudnn.benchmark}')
 print('✅ Performance optimizations verified')
 "
 
+echo -e "\n${YELLOW}Step 8.5: Accelerate Configuration${NC}"
+echo "==================================="
+
+echo "🚀 Setting up Accelerate for multi-GPU training..."
+echo -e "${BLUE}ℹ️  For multi-GPU training, you'll need to configure Accelerate:${NC}"
+echo "   accelerate config    # one-time setup"
+echo ""
+echo "Example multi-GPU commands:"
+echo "   accelerate launch --nproc_per_node=2 train.py --config test"
+echo "   accelerate launch --nproc_per_node=8 train.py --config production"
+echo ""
+read -p "Do you want to run 'accelerate config' now? (y/n): " -n 1 -r
+echo
+if [[ $REPLY =~ ^[Yy]$ ]]; then
+    accelerate config
+    echo -e "✅ Accelerate configuration completed"
+else
+    echo -e "${BLUE}ℹ️  Skipping accelerate config. Run later with: accelerate config${NC}"
+fi
+
 echo -e "\n${YELLOW}Step 9: Data Download${NC}"
 echo "==================="
+
+# Check credentials before attempting download
+if [[ -z "$GOOGLE_APPLICATION_CREDENTIALS" ]]; then
+    echo -e "${YELLOW}⚠️  No Google credentials found - download may fail${NC}"
+    echo "   Set GOOGLE_APPLICATION_CREDENTIALS or skip download"
+fi
 
 read -p "Do you want to download training data now? (y/n): " -n 1 -r
 echo
@@ -281,14 +315,18 @@ else
 fi
 echo ""
 echo "2. To start training:"
-echo "   # Quick test (5 files, 1000 steps)"
+echo "   # Single GPU - Quick test (5 files, 1000 steps)"
 echo "   python train.py --config test"
 echo ""
-echo "   # Production training (all files)"
-echo "   python train.py --config production"
+echo "   # Multi-GPU - Quick test with 2 GPUs"
+echo "   accelerate launch --nproc_per_node=2 train.py --config test"
+echo ""
+echo "   # Multi-GPU - Production training with 8 GPUs"
+echo "   accelerate launch --nproc_per_node=8 train.py --config production"
 echo ""
 echo "   # With specific mixed precision"
 echo "   python train.py --config test --mixed-precision bf16"
+echo "   accelerate launch --nproc_per_node=2 train.py --config test --mixed-precision bf16"
 echo ""
 echo "3. For interactive training guide:"
 echo "   ./start_training.sh"
@@ -299,9 +337,14 @@ echo ""
 
 if [[ "$HAS_GPU" == true ]]; then
     echo -e "${GREEN}Expected Performance:${NC}"
-    echo "- Test config: 1.5-3.0 steps/second"
-    echo "- Production config: 0.8-1.5 steps/second"
+    echo "- Single GPU: 1.5-3.0 steps/second"
+    echo "- Multi-GPU (2x): 2.5-5.0 steps/second"
+    echo "- Multi-GPU (8x): 8-15 steps/second"
     echo "- GPU utilization: 80-95%"
+    echo ""
+    echo -e "${BLUE}Multi-GPU Setup Reminder:${NC}"
+    echo "- Run 'accelerate config' once before multi-GPU training"
+    echo "- Use 'accelerate launch --nproc_per_node=N' for N GPUs"
 else
     echo -e "${YELLOW}⚠️  CPU Training Warning:${NC}"
     echo "- Training will be very slow (0.01-0.1 steps/second)"

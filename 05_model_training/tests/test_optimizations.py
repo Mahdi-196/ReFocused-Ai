@@ -10,6 +10,9 @@ import gc
 from transformers import GPTNeoXForCausalLM
 from accelerate import Accelerator
 import numpy as np
+import sys
+import os
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from configs import get_model_config, get_training_config
 from utils import create_dataloader

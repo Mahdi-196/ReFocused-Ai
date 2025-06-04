@@ -4,7 +4,7 @@ import tempfile
 import json
 
 # Set environment variables
-os.environ['GOOGLE_APPLICATION_CREDENTIALS'] = './credentials/black-dragon-461023-t5-93452a49f86b.json'
+os.environ['GOOGLE_APPLICATION_CREDENTIALS'] = '../credentials/black-dragon-461023-t5-93452a49f86b.json'
 os.environ['GOOGLE_CLOUD_PROJECT'] = 'black-dragon-461023-t5'
 
 print('🔐 Testing Google Cloud Storage Authentication...')
