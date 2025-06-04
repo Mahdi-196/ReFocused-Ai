@@ -182,16 +182,19 @@ class CheckpointManager:
         print(f"✅ Checkpoint {checkpoint_name} queued for background upload")
     
     def _background_upload_worker(self, local_dir: str, checkpoint_name: str):
-        """Worker function that runs in background thread"""
+        """Background worker for uploading checkpoint to GCS"""
         try:
-            # Create tar.gz of the checkpoint directory
-            tar_path = f"{local_dir}.tar.gz"
-            print(f"📦 Creating archive: {tar_path}")
+            # Check if gsutil is available
+            gsutil_check = subprocess.run(["which", "gsutil"], capture_output=True, text=True)
+            if gsutil_check.returncode != 0:
+                print(f"⚠️  gsutil not found, falling back to Python GCS client upload")
+                self._upload_to_gcs(local_dir, checkpoint_name)
+                return
             
-            # Use tar to create compressed archive
+            # Create tar.gz archive
+            tar_path = f"{local_dir}.tar.gz"
             result = subprocess.run([
-                "tar", "czf", tar_path, 
-                "-C", os.path.dirname(local_dir), 
+                "tar", "czf", tar_path, "-C", os.path.dirname(local_dir),
                 os.path.basename(local_dir)
             ], capture_output=True, text=True)
             
