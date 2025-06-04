@@ -26,7 +26,7 @@ class TrainingConfig:
     # Training hyperparameters
     learning_rate: float = 2e-4
     warmup_steps: int = 10
-    max_steps: int = 100
+    max_steps: int = 11450
     per_device_train_batch_size: int = 2  # Increased from 1 to 2
     gradient_accumulation_steps: int = 4  # Increased for effective larger batch size
     weight_decay: float = 0.1
@@ -47,8 +47,8 @@ class TrainingConfig:
     use_flash_attention: bool = False  # Use flash attention if available
     
     # Checkpointing optimization
-    save_steps: int = 500  # Reduced frequency for better performance
-    logging_steps: int = 25  # Moderate logging frequency
+    save_steps: int = 1145  # Save every 1145 steps (every ~10% of training)
+    logging_steps: int = 115  # Log every 115 steps (every ~1% of training)
     checkpoint_compression: bool = True  # Compress checkpoints to save space
     background_upload: bool = True  # Upload checkpoints in background
     
@@ -79,11 +79,11 @@ def get_training_config(config_type: str = "test") -> TrainingConfig:
     elif config_type == "production":
         return TrainingConfig(
             max_files=-1,  # All files
-            max_steps=10000,       # Full training
+            max_steps=11450,       # Extended training for better convergence
             per_device_train_batch_size=4,  # Increased from 1 to 4
             gradient_accumulation_steps=8,  # Effective batch size = 4 * 8 = 32
-            save_steps=500,        # Save every 500 steps
-            logging_steps=100,     # Log every 100 steps
+            save_steps=1145,       # Save every 1145 steps (every ~10% of training)
+            logging_steps=115,     # Log every 115 steps (every ~1% of training)
             dataloader_num_workers=4,  # Full parallelism
         )
     
