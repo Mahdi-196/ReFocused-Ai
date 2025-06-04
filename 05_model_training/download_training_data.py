@@ -3,17 +3,30 @@ from pathlib import Path
 import time
 from google.cloud import storage
 import json
+import numpy as np  # for integrity check
 
 # Set environment variables for Google Cloud authentication
 os.environ['GOOGLE_APPLICATION_CREDENTIALS'] = './credentials/black-dragon-461023-t5-93452a49f86b.json'
 os.environ['GOOGLE_CLOUD_PROJECT'] = 'black-dragon-461023-t5'
 
+def is_npz_intact(local_path: Path) -> bool:
+    """
+    Try to load the file with numpy to confirm it's a valid .npz.
+    Returns True if it opens without error, False otherwise.
+    """
+    try:
+        with np.load(str(local_path)) as f:
+            # just trying to open is enough; close immediately
+            _ = f.keys()
+        return True
+    except Exception:
+        return False
+
 def download_refocused_data():
-    """Download all tokenized training data from refocused-ai bucket"""
+    """Download all tokenized training data from refocused-ai bucket,
+       re-downloading only if the local copy is missing or invalid."""
     
     bucket_name = "refocused-ai"
-    
-    # Create local directories
     data_dir = Path("data/training")
     data_dir.mkdir(parents=True, exist_ok=True)
     
@@ -22,74 +35,62 @@ def download_refocused_data():
     print(f"Target directory: {data_dir.absolute()}")
     
     try:
-        # Initialize Google Cloud Storage client with credentials
         print("🔐 Authenticating with Google Cloud Storage...")
         client = storage.Client()
         bucket = client.bucket(bucket_name)
         
-        # Get list of all files
         print("📋 Fetching file list...")
         blobs = list(bucket.list_blobs())
-        
         if not blobs:
             print("❌ No files found in bucket")
             return False
-            
-        print(f"✅ Found {len(blobs)} files")
         
-        # Filter for .npz files only
         npz_blobs = [blob for blob in blobs if blob.name.endswith('.npz')]
-        print(f"🎯 {len(npz_blobs)} tokenized .npz files to download")
+        print(f"✅ Found {len(npz_blobs)} tokenized .npz files")
         
-        # Calculate total size
         total_size = sum(blob.size for blob in npz_blobs)
         total_mb = total_size / (1024 * 1024)
         print(f"📊 Total download size: {total_mb:.1f} MB")
         
-        # Download all files
         print("\n🔥 Starting downloads...")
         start_time = time.time()
         downloaded_count = 0
         downloaded_bytes = 0
         
         for i, blob in enumerate(npz_blobs, 1):
-            # 1. Build precise local path (preserving any sub-folders)
             relative_path = Path(blob.name)
             local_path = data_dir / relative_path
             file_size = blob.size
             
-            # Create any intermediate folders (e.g. data/training/subdir1/)
             local_path.parent.mkdir(parents=True, exist_ok=True)
             
-            # 2. Skip if already downloaded
+            # If file exists, check integrity
             if local_path.exists():
-                print(f"[{i:3d}/{len(npz_blobs)}] ⏭️  Skipping (already exists): {relative_path}")
-                # Still count as "downloaded" for progress tracking
-                downloaded_count += 1
-                downloaded_bytes += file_size
-                continue
+                if is_npz_intact(local_path):
+                    print(f"[{i:3d}/{len(npz_blobs)}] ⏭️  Skipping (intact): {relative_path}")
+                    downloaded_count += 1
+                    downloaded_bytes += file_size
+                    continue
+                else:
+                    # corrupted: delete and re-download
+                    print(f"[{i:3d}/{len(npz_blobs)}] ⚠️  Corrupted detected, re-downloading: {relative_path}")
+                    local_path.unlink()  # remove the bad file
             
-            # 3. Otherwise download into that same nested path
+            # Download fresh copy
             print(f"[{i:3d}/{len(npz_blobs)}] ⬇️  Downloading {relative_path} ({file_size/1024/1024:.1f} MB)")
-            
             try:
-                # Download file using Google Cloud Storage client
                 blob.download_to_filename(str(local_path))
-                
                 downloaded_count += 1
                 downloaded_bytes += file_size
-                
-                # Progress update every 10 files
-                if i % 10 == 0:
-                    elapsed = time.time() - start_time
-                    speed_mbps = (downloaded_bytes / (1024 * 1024)) / elapsed if elapsed > 0 else 0
-                    print(f"    📈 Progress: {i}/{len(npz_blobs)} files, {speed_mbps:.1f} MB/s")
-                
             except Exception as e:
                 print(f"    ❌ Failed to download {relative_path}: {e}")
                 continue
+            
+            if i % 10 == 0:
+                elapsed = time.time() - start_time
+                speed_mbps = (downloaded_bytes / (1024 * 1024)) / elapsed if elapsed > 0 else 0
+                print(f"    📈 Progress: {i}/{len(npz_blobs)} files, {speed_mbps:.1f} MB/s")
         
-        # Final summary
         elapsed = time.time() - start_time
         avg_speed = (downloaded_bytes / (1024 * 1024)) / elapsed if elapsed > 0 else 0
         
@@ -101,9 +102,8 @@ def download_refocused_data():
         print(f"🚀 Average speed: {avg_speed:.1f} MB/s")
         print(f"📁 Files saved to: {data_dir.absolute()}")
         
-        # Verify downloads (including nested folders)
         print("\n🔍 Verifying downloads...")
-        local_files = list(data_dir.glob("**/*.npz"))  # Recursive search
+        local_files = list(data_dir.glob("**/*.npz"))
         print(f"✅ {len(local_files)} .npz files found in directory tree")
         
         if len(local_files) == len(npz_blobs):
@@ -115,28 +115,25 @@ def download_refocused_data():
             
     except Exception as e:
         print(f"❌ Error downloading data: {e}")
-        print(f"Make sure GOOGLE_APPLICATION_CREDENTIALS is set correctly")
+        print("Make sure GOOGLE_APPLICATION_CREDENTIALS is set correctly")
         return False
 
 def create_data_info():
-    """Create info file about the downloaded data"""
+    """Create info file about the downloaded data."""
     data_dir = Path("data/training")
-    npz_files = list(data_dir.glob("**/*.npz"))  # Recursive search for nested folders
-    
+    npz_files = list(data_dir.glob("**/*.npz"))
     if not npz_files:
         print("No .npz files found to analyze")
         return
     
-    # Analyze file types
     comments_files = [f for f in npz_files if 'comments' in f.name]
     submissions_files = [f for f in npz_files if 'submissions' in f.name]
     
-    # Get subreddits
     subreddits = set()
     for f in npz_files:
         parts = f.name.split('_')
         if len(parts) >= 3:
-            subreddit = parts[2]  # tokenized_cleaned_SUBREDDIT_...
+            subreddit = parts[2]
             subreddits.add(subreddit)
     
     info = {
@@ -150,7 +147,6 @@ def create_data_info():
         "ready_for_training": True
     }
     
-    # Save info
     info_file = data_dir / "data_info.json"
     with open(info_file, 'w') as f:
         json.dump(info, f, indent=2)
@@ -161,7 +157,6 @@ def create_data_info():
     print(f"   Submissions: {info['submissions_files']}")
     print(f"   Subreddits: {info['unique_subreddits']}")
     print(f"   Info saved: {info_file}")
-    
     return info
 
 if __name__ == "__main__":
@@ -171,4 +166,4 @@ if __name__ == "__main__":
         print("\n🚀 READY FOR TRAINING!")
         print("Run your training script with: --data-path data/training")
     else:
-        print("\n❌ Download failed. Check errors above.") 
+        print("\n❌ Download failed. Check errors above.")
