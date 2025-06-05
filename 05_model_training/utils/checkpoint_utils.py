@@ -6,6 +6,7 @@ import os
 import torch
 import subprocess
 import threading
+import tempfile
 from google.cloud import storage
 from typing import Optional, Dict, Any
 import json
@@ -214,36 +215,50 @@ class CheckpointManager:
     
     def _background_upload_tar_worker(self, tar_path: str, checkpoint_name: str):
         """Background worker to upload a pre-made tarball using gsutil and then delete the local tarball."""
+        temp_boto_file = None  # Initialize
         try:
             gsutil_executable_path = shutil.which("gsutil")
             if gsutil_executable_path is None:
                 print(f"⚠️ gsutil not found. Cannot perform background upload for {tar_path}.")
-                if os.path.exists(tar_path):  # Clean up tarball if gsutil not found
-                     os.remove(tar_path)
-                     print(f"🗑️ Cleaned up unused tarball {tar_path} as gsutil is not found.")
+                if os.path.exists(tar_path):
+                    os.remove(tar_path)
+                    print(f"🗑️ Cleaned up unused tarball {tar_path} as gsutil is not found.")
                 return
-            
+
             bucket_uri = f"gs://{self.bucket_name}/{self.checkpoint_path}/{checkpoint_name}.tar.gz"
             print(f"☁️ Uploading {tar_path} to {bucket_uri} using gsutil...")
-            
+
             current_env = os.environ.copy()
             gac_path = current_env.get('GOOGLE_APPLICATION_CREDENTIALS')
-            # Your debug print for GAC path:
-            print(f"BACKGROUND UPLOAD DEBUG: GOOGLE_APPLICATION_CREDENTIALS for gsutil: {gac_path}")
+            gcp_project = current_env.get('GOOGLE_CLOUD_PROJECT')  # Get project from env
 
             if gac_path is None:
                 print(f"❌ THREAD ERROR: GOOGLE_APPLICATION_CREDENTIALS not found for gsutil for {checkpoint_name}!")
                 # Do not delete tar_path here as upload won't be attempted
                 return
 
+            # --- START: Create and use temporary Boto config ---
+            boto_config_content = f"[Credentials]\ngs_service_key_file = {gac_path}\n\n"
+            if gcp_project:  # Only add project_id if it's set
+                boto_config_content += f"[GSUtil]\ndefault_project_id = {gcp_project}\n"
+            
+            # Create a named temporary file to store the Boto config
+            # Delete=False is important on some OSes when passing the name to a subprocess
+            with tempfile.NamedTemporaryFile(mode="w", delete=False) as tf:
+                tf.write(boto_config_content)
+                temp_boto_file = tf.name  # Get the path to the temporary file
+            
+            current_env['BOTO_CONFIG'] = temp_boto_file
+            print(f"🔧 Using temporary Boto config for gsutil: {temp_boto_file}")
+            # --- END: Create and use temporary Boto config ---
+
             upload_result = subprocess.run(
-                [gsutil_executable_path, "-m", "cp", tar_path, bucket_uri],
+                [gsutil_executable_path, "-m", "cp", tar_path, bucket_uri],  # You can keep -m if preferred
                 capture_output=True, text=True, env=current_env
             )
-            
+
             if upload_result.returncode == 0:
                 print(f"✅ Successfully uploaded {checkpoint_name}.tar.gz")
-                # Clean up the local tar file ONLY after successful upload
                 if os.path.exists(tar_path):
                     os.remove(tar_path)
                     print(f"🗑️ Cleaned up uploaded tarball {tar_path}")
@@ -254,6 +269,12 @@ class CheckpointManager:
         except Exception as e:
             print(f"❌ Exception in background tarball upload worker for {checkpoint_name}: {e}")
             # Keep tar_path for debugging
+        finally:
+            # --- START: Clean up temporary Boto config ---
+            if temp_boto_file and os.path.exists(temp_boto_file):
+                os.remove(temp_boto_file)
+                print(f"🗑️ Cleaned up temporary Boto config: {temp_boto_file}")
+            # --- END: Clean up temporary Boto config ---
     
     def _cleanup_upload_processes(self):
         """Remove completed upload threads from tracking"""
