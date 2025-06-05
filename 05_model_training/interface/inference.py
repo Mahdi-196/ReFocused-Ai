@@ -34,24 +34,6 @@ DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 # Default prompt for text generation
 DEFAULT_PROMPT = "Hello, I am a language model,"
 
-print("=" * 70)
-print("🚀 ReFocused-AI Interactive Model Inference Script")
-print("=" * 70)
-print(f"🖥️  Device: {DEVICE}")
-print(f"🔥 CUDA Available: {torch.cuda.is_available()}")
-if torch.cuda.is_available():
-    print(f"🎮 CUDA Device: {torch.cuda.get_device_name()}")
-
-# Early credential check to provide helpful feedback
-print("\n🔐 Checking Google Cloud Storage credentials...")
-credentials_available = setup_gcs_credentials()
-if credentials_available:
-    print("✅ GCS access enabled - bucket downloads available")
-else:
-    print("⚠️  GCS access disabled - only local checkpoints and manual paths available")
-
-print("=" * 70)
-
 # ============================================================================
 # CREDENTIAL SETUP AND VALIDATION
 # ============================================================================
@@ -97,6 +79,28 @@ def setup_gcs_credentials():
     print("   3. Restart the script after setting credentials")
     
     return False
+
+# ============================================================================
+# SCRIPT INITIALIZATION
+# ============================================================================
+
+print("=" * 70)
+print("🚀 ReFocused-AI Interactive Model Inference Script")
+print("=" * 70)
+print(f"🖥️  Device: {DEVICE}")
+print(f"🔥 CUDA Available: {torch.cuda.is_available()}")
+if torch.cuda.is_available():
+    print(f"🎮 CUDA Device: {torch.cuda.get_device_name()}")
+
+# Early credential check to provide helpful feedback
+print("\n🔐 Checking Google Cloud Storage credentials...")
+credentials_available = setup_gcs_credentials()
+if credentials_available:
+    print("✅ GCS access enabled - bucket downloads available")
+else:
+    print("⚠️  GCS access disabled - only local checkpoints and manual paths available")
+
+print("=" * 70)
 
 # ============================================================================
 # CHECKPOINT DISCOVERY AND SELECTION
