@@ -41,6 +41,41 @@ echo "✅ Authentication configured"
 echo "   Project: $GOOGLE_CLOUD_PROJECT"
 echo "   Credentials: $GOOGLE_APPLICATION_CREDENTIALS"
 
+# Test GCS permissions
+echo "🧪 Testing Google Cloud Storage permissions..."
+python -c "
+import os
+from google.cloud import storage
+try:
+    client = storage.Client()
+    bucket = client.bucket('refocused-ai')
+    # Test basic read access
+    list(bucket.list_blobs(max_results=1))
+    print('✅ GCS read access confirmed')
+    
+    # Test bucket metadata access (needed for uploads)
+    try:
+        bucket.exists()
+        print('✅ GCS bucket access confirmed')
+    except Exception as e:
+        print(f'⚠️  Limited GCS permissions detected: {e}')
+        print('   Training will proceed but uploads may fail')
+        print('   See fix_permissions.md for permission setup instructions')
+        
+except Exception as e:
+    print(f'❌ GCS authentication failed: {e}')
+    print('   Check your service account permissions')
+    print('   See fix_permissions.md for troubleshooting')
+    exit(1)
+"
+
+if [[ $? -ne 0 ]]; then
+    echo "❌ GCS authentication test failed"
+    echo "   Please check your credentials and permissions"
+    echo "   See fix_permissions.md for help"
+    exit 1
+fi
+
 # Parse command line arguments
 CONFIG_TYPE="test"
 MAX_STEPS=""

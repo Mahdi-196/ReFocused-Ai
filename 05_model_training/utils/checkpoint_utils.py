@@ -242,19 +242,56 @@ class CheckpointManager:
         """Upload checkpoint directory to GCS (synchronous fallback)"""
         print(f"Uploading checkpoint to gs://{self.bucket_name}/{self.checkpoint_path}/{checkpoint_name}")
         
-        for root, dirs, files in os.walk(local_dir):
-            for file in files:
-                local_file_path = os.path.join(root, file)
-                
-                # Create relative path for GCS
-                relative_path = os.path.relpath(local_file_path, local_dir)
-                gcs_path = f"{self.checkpoint_path}/{checkpoint_name}/{relative_path}"
-                
-                # Upload file with proper prefix
-                blob = self.bucket.blob(gcs_path)
-                blob.upload_from_filename(local_file_path)
-        
-        print(f"Checkpoint uploaded successfully")
+        try:
+            # Ensure we have a valid client and bucket
+            if not hasattr(self, 'client') or self.client is None:
+                print("🔄 Initializing GCS client for upload...")
+                self.client = storage.Client()
+                self.bucket = self.client.bucket(self.bucket_name)
+            
+            # Test client connection first
+            try:
+                # Try to access bucket metadata to verify authentication
+                _ = self.bucket.exists()
+                print("✅ GCS client authenticated successfully")
+            except Exception as auth_error:
+                print(f"❌ GCS authentication failed: {auth_error}")
+                print("   Check GOOGLE_APPLICATION_CREDENTIALS and GOOGLE_CLOUD_PROJECT environment variables")
+                return
+            
+            uploaded_files = 0
+            total_files = sum(len(files) for _, _, files in os.walk(local_dir))
+            
+            print(f"📁 Uploading {total_files} files...")
+            
+            for root, dirs, files in os.walk(local_dir):
+                for file in files:
+                    local_file_path = os.path.join(root, file)
+                    
+                    # Create relative path for GCS
+                    relative_path = os.path.relpath(local_file_path, local_dir)
+                    gcs_path = f"{self.checkpoint_path}/{checkpoint_name}/{relative_path}"
+                    
+                    try:
+                        # Upload file with proper prefix
+                        blob = self.bucket.blob(gcs_path)
+                        blob.upload_from_filename(local_file_path)
+                        uploaded_files += 1
+                        
+                        if uploaded_files % 10 == 0 or uploaded_files == total_files:
+                            print(f"   📤 Uploaded {uploaded_files}/{total_files} files")
+                            
+                    except Exception as upload_error:
+                        print(f"❌ Failed to upload {relative_path}: {upload_error}")
+                        raise  # Re-raise to stop the upload process
+            
+            print(f"✅ Checkpoint uploaded successfully ({uploaded_files} files)")
+            
+        except Exception as e:
+            print(f"❌ Upload to GCS failed: {e}")
+            print("   This may be due to authentication issues or network problems")
+            # Don't raise the exception to prevent training interruption
+            return
     
     def _cleanup_old_checkpoints(self, keep_last: int = 3):
         """Remove old local checkpoints to save disk space"""
