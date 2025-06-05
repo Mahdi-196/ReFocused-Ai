@@ -407,46 +407,82 @@ class CheckpointManager:
         }
     
     def _download_from_gcs(self, checkpoint_name: str, local_dir: str):
-        """Download checkpoint from GCS (supports both tar.gz and directory format)"""
+        """Download checkpoint from GCS using Python client (avoids gsutil authentication issues)"""
+        # Ensure GCS client is available
+        self._ensure_client()
+        if self.client is None or self.bucket is None:
+            print("❌ GCS client not available for download. Cannot proceed.")
+            return
+
         # Try downloading tar.gz first (background upload format)
         tar_path = f"{local_dir}.tar.gz"
-        bucket_uri = f"gs://{self.bucket_name}/{self.checkpoint_path}/{checkpoint_name}.tar.gz"
+        tar_blob_name = f"{self.checkpoint_path}/{checkpoint_name}.tar.gz"
         
-        result = subprocess.run([
-            "gsutil", "cp", bucket_uri, tar_path
-        ], capture_output=True, text=True)
+        try:
+            print(f"📥 Attempting to download {tar_blob_name} using Python GCS client...")
+            tar_blob = self.bucket.blob(tar_blob_name)
+            
+            if tar_blob.exists():
+                print(f"📦 Downloading {tar_blob_name} to {tar_path}")
+                tar_blob.download_to_filename(tar_path)
+                
+                # Extract tar.gz
+                print(f"📦 Extracting {tar_path}")
+                subprocess.run([
+                    "tar", "xzf", tar_path, 
+                    "-C", os.path.dirname(local_dir)
+                ], check=True)
+                os.remove(tar_path)
+                print(f"✅ Successfully downloaded and extracted {checkpoint_name}")
+                return
+            else:
+                print(f"⚠️ Tar.gz format not found for {checkpoint_name}, trying directory format...")
         
-        if result.returncode == 0:
-            # Extract tar.gz
-            print(f"📦 Extracting {tar_path}")
-            subprocess.run([
-                "tar", "xzf", tar_path, 
-                "-C", os.path.dirname(local_dir)
-            ])
-            os.remove(tar_path)
-            return
+        except Exception as e:
+            print(f"⚠️ Failed to download tar.gz format: {e}. Trying directory format...")
+            if os.path.exists(tar_path):
+                os.remove(tar_path)
         
-        # Fallback to old directory-based download
+        # Fallback to directory-based download using Python GCS client
+        print(f"📁 Downloading checkpoint directory format for {checkpoint_name}...")
         os.makedirs(local_dir, exist_ok=True)
         
-        # Use authenticated client for directory downloads
-        if not hasattr(self, 'client') or self.client is None:
-            self.client = storage.Client()
-            self.bucket = self.client.bucket(self.bucket_name)
-        
         prefix = f"{self.checkpoint_path}/{checkpoint_name}/"
-        blobs = self.bucket.list_blobs(prefix=prefix)
-        
-        for blob in blobs:
-            # Create local file path
-            relative_path = blob.name[len(prefix):]
-            local_file_path = os.path.join(local_dir, relative_path)
+        try:
+            blobs = list(self.bucket.list_blobs(prefix=prefix))
             
-            # Create directory if needed
-            os.makedirs(os.path.dirname(local_file_path), exist_ok=True)
+            if not blobs:
+                print(f"❌ No files found for checkpoint {checkpoint_name} at {prefix}")
+                return
             
-            # Download file
-            blob.download_to_filename(local_file_path)
+            downloaded_files = 0
+            print(f"📁 Found {len(blobs)} files to download...")
+            
+            for blob in blobs:
+                # Create local file path
+                relative_path = blob.name[len(prefix):]
+                if not relative_path:  # Skip if it's just the prefix (directory marker)
+                    continue
+                    
+                local_file_path = os.path.join(local_dir, relative_path)
+                
+                # Create directory if needed
+                local_file_dir = os.path.dirname(local_file_path)
+                if local_file_dir:
+                    os.makedirs(local_file_dir, exist_ok=True)
+                
+                # Download file
+                blob.download_to_filename(local_file_path)
+                downloaded_files += 1
+                
+                if downloaded_files % 10 == 0 or downloaded_files == len(blobs):
+                    print(f"  📥 Downloaded {downloaded_files}/{len(blobs)} files")
+            
+            print(f"✅ Successfully downloaded {checkpoint_name} directory format ({downloaded_files} files)")
+            
+        except Exception as e:
+            print(f"❌ Failed to download checkpoint directory: {e}")
+            raise
     
     def get_latest_checkpoint(self) -> Optional[str]:
         """Find the latest checkpoint in GCS"""
