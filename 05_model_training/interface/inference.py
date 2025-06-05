@@ -1,0 +1,385 @@
+#!/usr/bin/env python3
+"""
+Interactive Inference Script for Hugging Face Transformers Model
+===============================================================
+
+This script provides an interactive interface to:
+1. Choose from locally available checkpoints
+2. Download checkpoints from Google Cloud Storage bucket
+3. Perform text generation inference
+
+Usage: python inference.py
+"""
+
+import torch
+import os
+import sys
+import subprocess
+import tempfile
+from pathlib import Path
+from transformers import AutoTokenizer, AutoModelForCausalLM
+from google.cloud import storage
+
+# ============================================================================
+# CONFIGURATION SECTION
+# ============================================================================
+
+# Google Cloud Storage settings
+BUCKET_NAME = "refocused-ai"
+BUCKET_CHECKPOINT_PATH = "Checkpoints"
+
+# Automatically detect the best available device (GPU if available, otherwise CPU)
+DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
+
+# Default prompt for text generation
+DEFAULT_PROMPT = "Hello, I am a language model,"
+
+print("=" * 70)
+print("🚀 ReFocused-AI Interactive Model Inference Script")
+print("=" * 70)
+print(f"🖥️  Device: {DEVICE}")
+print(f"🔥 CUDA Available: {torch.cuda.is_available()}")
+if torch.cuda.is_available():
+    print(f"🎮 CUDA Device: {torch.cuda.get_device_name()}")
+print("=" * 70)
+
+# ============================================================================
+# CHECKPOINT DISCOVERY AND SELECTION
+# ============================================================================
+
+def find_local_checkpoints():
+    """Find all local checkpoint directories"""
+    checkpoint_dirs = []
+    
+    # Common checkpoint locations in the project
+    search_paths = [
+        "05_model_training/checkpoints",
+        "checkpoints", 
+        "models",
+        "05_model_training/cache",
+        "."
+    ]
+    
+    print("🔍 Scanning for local checkpoints...")
+    
+    for search_path in search_paths:
+        if os.path.exists(search_path):
+            for item in os.listdir(search_path):
+                item_path = os.path.join(search_path, item)
+                if os.path.isdir(item_path):
+                    # Check if directory contains model files
+                    model_files = ["config.json", "pytorch_model.bin", "model.safetensors"]
+                    tokenizer_files = ["tokenizer.json", "tokenizer_config.json", "vocab.json"]
+                    
+                    has_model = any(os.path.exists(os.path.join(item_path, f)) for f in model_files)
+                    has_tokenizer = any(os.path.exists(os.path.join(item_path, f)) for f in tokenizer_files)
+                    
+                    if has_model or has_tokenizer:
+                        # Get relative path from project root
+                        rel_path = os.path.relpath(item_path)
+                        checkpoint_dirs.append({
+                            'name': item,
+                            'path': rel_path,
+                            'has_model': has_model,
+                            'has_tokenizer': has_tokenizer,
+                            'size_mb': get_dir_size_mb(item_path)
+                        })
+    
+    return checkpoint_dirs
+
+def get_dir_size_mb(path):
+    """Calculate directory size in MB"""
+    try:
+        total_size = 0
+        for dirpath, dirnames, filenames in os.walk(path):
+            for filename in filenames:
+                file_path = os.path.join(dirpath, filename)
+                if os.path.exists(file_path):
+                    total_size += os.path.getsize(file_path)
+        return total_size / (1024 * 1024)
+    except:
+        return 0
+
+def list_bucket_checkpoints():
+    """List available checkpoints in the GCS bucket"""
+    try:
+        print("☁️  Connecting to Google Cloud Storage...")
+        client = storage.Client()
+        bucket = client.bucket(BUCKET_NAME)
+        
+        print(f"📡 Scanning gs://{BUCKET_NAME}/{BUCKET_CHECKPOINT_PATH}/")
+        blobs = list(bucket.list_blobs(prefix=f"{BUCKET_CHECKPOINT_PATH}/"))
+        
+        # Find unique checkpoint names
+        checkpoints = set()
+        for blob in blobs:
+            # Extract checkpoint name from path
+            path_parts = blob.name.split('/')
+            if len(path_parts) >= 2:
+                checkpoint_name = path_parts[1]
+                if checkpoint_name and not checkpoint_name.endswith('.tar.gz'):
+                    checkpoints.add(checkpoint_name)
+                elif checkpoint_name.endswith('.tar.gz'):
+                    checkpoints.add(checkpoint_name.replace('.tar.gz', ''))
+        
+        return sorted(list(checkpoints))
+        
+    except Exception as e:
+        print(f"⚠️  Could not access bucket: {e}")
+        return []
+
+def download_checkpoint_from_bucket(checkpoint_name, local_dir="./downloaded_checkpoints"):
+    """Download a checkpoint from GCS bucket"""
+    print(f"📥 Downloading checkpoint '{checkpoint_name}' from bucket...")
+    
+    os.makedirs(local_dir, exist_ok=True)
+    local_checkpoint_path = os.path.join(local_dir, checkpoint_name)
+    
+    try:
+        client = storage.Client()
+        bucket = client.bucket(BUCKET_NAME)
+        
+        # Try downloading tar.gz first (compressed format)
+        tar_blob_name = f"{BUCKET_CHECKPOINT_PATH}/{checkpoint_name}.tar.gz"
+        tar_blob = bucket.blob(tar_blob_name)
+        
+        if tar_blob.exists():
+            tar_path = f"{local_checkpoint_path}.tar.gz"
+            print(f"📦 Downloading compressed checkpoint...")
+            tar_blob.download_to_filename(tar_path)
+            
+            print(f"📦 Extracting checkpoint...")
+            subprocess.run([
+                "tar", "xzf", tar_path, 
+                "-C", local_dir
+            ], check=True)
+            os.remove(tar_path)
+            
+        else:
+            # Fallback to directory download
+            print(f"📁 Downloading checkpoint files...")
+            os.makedirs(local_checkpoint_path, exist_ok=True)
+            
+            prefix = f"{BUCKET_CHECKPOINT_PATH}/{checkpoint_name}/"
+            blobs = bucket.list_blobs(prefix=prefix)
+            
+            downloaded_files = 0
+            for blob in blobs:
+                if blob.name != prefix:  # Skip directory marker
+                    relative_path = blob.name[len(prefix):]
+                    local_file_path = os.path.join(local_checkpoint_path, relative_path)
+                    
+                    # Create directories if needed
+                    os.makedirs(os.path.dirname(local_file_path), exist_ok=True)
+                    
+                    blob.download_to_filename(local_file_path)
+                    downloaded_files += 1
+            
+            if downloaded_files == 0:
+                print(f"❌ No files found for checkpoint '{checkpoint_name}'")
+                return None
+        
+        print(f"✅ Successfully downloaded checkpoint to: {local_checkpoint_path}")
+        return local_checkpoint_path
+        
+    except Exception as e:
+        print(f"❌ Error downloading checkpoint: {e}")
+        return None
+
+def select_checkpoint():
+    """Interactive checkpoint selection"""
+    print("\n" + "=" * 50)
+    print("📁 CHECKPOINT SELECTION")
+    print("=" * 50)
+    
+    # Find local checkpoints
+    local_checkpoints = find_local_checkpoints()
+    
+    if local_checkpoints:
+        print(f"\n✅ Found {len(local_checkpoints)} local checkpoint(s):")
+        for i, cp in enumerate(local_checkpoints, 1):
+            status = "🔥" if cp['has_model'] and cp['has_tokenizer'] else "⚠️ "
+            print(f"  {i}. {cp['name']} ({cp['size_mb']:.1f} MB) {status}")
+            print(f"     📂 {cp['path']}")
+    else:
+        print("📭 No local checkpoints found")
+    
+    # Check bucket checkpoints
+    bucket_checkpoints = list_bucket_checkpoints()
+    if bucket_checkpoints:
+        print(f"\n☁️  Found {len(bucket_checkpoints)} checkpoint(s) in bucket:")
+        for cp in bucket_checkpoints[:10]:  # Show first 10
+            print(f"  • {cp}")
+        if len(bucket_checkpoints) > 10:
+            print(f"  ... and {len(bucket_checkpoints) - 10} more")
+    
+    # Selection menu
+    print(f"\n🎯 SELECT AN OPTION:")
+    if local_checkpoints:
+        print(f"  1-{len(local_checkpoints)}: Use local checkpoint")
+    if bucket_checkpoints:
+        print(f"  B: Download from bucket")
+    print(f"  M: Manual path entry")
+    print(f"  Q: Quit")
+    
+    while True:
+        choice = input("\n👉 Your choice: ").strip().upper()
+        
+        if choice == 'Q':
+            print("👋 Goodbye!")
+            sys.exit(0)
+        
+        elif choice == 'M':
+            manual_path = input("📂 Enter checkpoint path: ").strip()
+            if os.path.exists(manual_path):
+                return manual_path
+            else:
+                print(f"❌ Path not found: {manual_path}")
+                continue
+        
+        elif choice == 'B' and bucket_checkpoints:
+            print(f"\n☁️  Available checkpoints in bucket:")
+            for i, cp in enumerate(bucket_checkpoints, 1):
+                print(f"  {i}. {cp}")
+            
+            try:
+                bucket_choice = int(input("👉 Select checkpoint number: ")) - 1
+                if 0 <= bucket_choice < len(bucket_checkpoints):
+                    selected_checkpoint = bucket_checkpoints[bucket_choice]
+                    downloaded_path = download_checkpoint_from_bucket(selected_checkpoint)
+                    if downloaded_path:
+                        return downloaded_path
+                else:
+                    print("❌ Invalid selection")
+                    continue
+            except ValueError:
+                print("❌ Please enter a valid number")
+                continue
+        
+        elif choice.isdigit() and local_checkpoints:
+            try:
+                local_choice = int(choice) - 1
+                if 0 <= local_choice < len(local_checkpoints):
+                    return local_checkpoints[local_choice]['path']
+                else:
+                    print("❌ Invalid selection")
+                    continue
+            except ValueError:
+                print("❌ Please enter a valid number")
+                continue
+        
+        else:
+            print("❌ Invalid choice. Try again.")
+
+# Get checkpoint path
+CHECKPOINT_PATH = select_checkpoint()
+print(f"\n🎯 Selected checkpoint: {CHECKPOINT_PATH}")
+
+# Get custom prompt
+print(f"\n💭 PROMPT CONFIGURATION")
+print(f"Default prompt: '{DEFAULT_PROMPT}'")
+custom_prompt = input("Enter custom prompt (or press Enter for default): ").strip()
+PROMPT_TEXT = custom_prompt if custom_prompt else DEFAULT_PROMPT
+
+print("=" * 70)
+
+# ============================================================================
+# LOAD TOKENIZER AND MODEL SECTION
+# ============================================================================
+
+try:
+    print("\n🔄 Loading tokenizer...")
+    # Load the tokenizer from the checkpoint directory
+    # The tokenizer handles text preprocessing and postprocessing
+    tokenizer = AutoTokenizer.from_pretrained(CHECKPOINT_PATH)
+    print("✅ Tokenizer loaded successfully.")
+    
+    print("\n🔄 Loading model... (This might take a few minutes and significant RAM/VRAM)")
+    # Load the model from the checkpoint directory
+    # Consider uncommenting the options below for memory optimization:
+    # torch_dtype=torch.float16  # Use half precision to reduce VRAM usage
+    # low_cpu_mem_usage=True     # Reduce RAM usage during loading
+    model = AutoModelForCausalLM.from_pretrained(
+        CHECKPOINT_PATH,
+        # torch_dtype=torch.float16,  # Uncomment for VRAM optimization
+        # low_cpu_mem_usage=True      # Uncomment for RAM optimization
+    )
+    
+    # Move model to the appropriate device (GPU or CPU)
+    print(f"🔄 Moving model to {DEVICE}...")
+    model.to(DEVICE)
+    
+    # Set model to evaluation mode - this disables dropout and batch normalization
+    # layers that behave differently during training vs inference
+    model.eval()
+    print("✅ Model loaded successfully and moved to device.")
+    
+except Exception as e:
+    print(f"❌ Error loading model or tokenizer: {e}")
+    print("\n🔍 Please check the following:")
+    print(f"   • CHECKPOINT_PATH is correct: {CHECKPOINT_PATH}")
+    print("   • Directory exists and contains required files:")
+    print("     - pytorch_model.bin (or model.safetensors)")
+    print("     - config.json")
+    print("     - tokenizer.json")
+    print("     - tokenizer_config.json")
+    print("   • You have sufficient RAM/VRAM available")
+    print("   • All required dependencies are installed")
+    sys.exit(1)
+
+# ============================================================================
+# GENERATE TEXT SECTION
+# ============================================================================
+
+try:
+    print(f"\n🚀 Generating text for prompt: '{PROMPT_TEXT}'")
+    print("⏳ Please wait while the model generates text...")
+    
+    # Encode the input prompt into tokens that the model can understand
+    # return_tensors="pt" returns PyTorch tensors
+    input_ids = tokenizer(PROMPT_TEXT, return_tensors="pt").to(DEVICE)
+    
+    # Use torch.no_grad() to disable gradient computation during inference
+    # This saves memory and speeds up computation since we're not training
+    with torch.no_grad():
+        # Generate text using the model with various sampling parameters
+        outputs = model.generate(
+            input_ids.input_ids,           # Input token IDs
+            max_length=100,                # Maximum length of generated sequence
+            num_return_sequences=1,        # Number of different sequences to generate
+            do_sample=True,                # Enable sampling (vs greedy decoding)
+            temperature=0.7,               # Controls randomness (lower = more focused)
+            top_k=50,                      # Consider only top k most likely next tokens
+            top_p=0.95,                    # Nucleus sampling: consider tokens with cumulative probability <= top_p
+            pad_token_id=tokenizer.eos_token_id  # Use end-of-sequence token for padding
+        )
+    
+    # Decode the generated tokens back to human-readable text
+    # skip_special_tokens=True removes tokens like [PAD], [EOS], etc.
+    generated_text = tokenizer.decode(outputs[0], skip_special_tokens=True)
+    
+    # Display the results clearly
+    print("\n" + "=" * 70)
+    print("--- MODEL OUTPUT ---")
+    print("=" * 70)
+    print(generated_text)
+    print("=" * 70)
+    print("--- END OF OUTPUT ---")
+    print("=" * 70)
+    
+except Exception as e:
+    print(f"❌ Error during text generation: {e}")
+    print("This could be due to:")
+    print("   • Insufficient GPU/CPU memory")
+    print("   • Model compatibility issues")
+    print("   • Invalid generation parameters")
+    sys.exit(1)
+
+# ============================================================================
+# END MESSAGE
+# ============================================================================
+
+print("\n✅ Inference script finished.")
+print("💡 To generate different text, run the script again and try different prompts.")
+print("💡 To adjust generation quality, experiment with temperature, top_k, and top_p parameters.")
+print("🚀 ReFocused-AI - Pushing the boundaries of language models!") 
