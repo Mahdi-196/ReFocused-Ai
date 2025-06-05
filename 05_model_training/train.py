@@ -183,18 +183,74 @@ def main():
         background_upload=not args.no_background_upload
     )
     
-    # Training loop with optimizations
-    print(f"\n📈 Starting optimized training loop...")
-    start_time = time.time()
-    model.train()
+    # Initialize training state variables
     completed_steps = 0
+    starting_epoch = 0
     total_loss = 0.0
-    
-    # Enhanced tracking for comprehensive checkpointing
+    best_loss = float('inf')
     loss_history = []
     learning_rate_history = []
-    best_loss = float('inf')
     validation_metrics = {}
+    
+    # Handle checkpoint resuming
+    if args.resume:
+        print(f"🔄 Attempting to resume training from checkpoint: {args.resume}")
+        try:
+            checkpoint_data = checkpoint_manager.load_checkpoint(
+                accelerator=accelerator,
+                checkpoint_name=args.resume,
+                scheduler=lr_scheduler
+            )
+            
+            if checkpoint_data and checkpoint_data.get('checkpoint_info'):
+                # Restore state from the loaded checkpoint
+                chkp_info = checkpoint_data['checkpoint_info']
+                completed_steps = chkp_info.get('step', 0)
+                starting_epoch = chkp_info.get('epoch', 0)
+                best_loss = chkp_info.get('best_loss', float('inf'))
+                
+                # Restore training metrics if available
+                if checkpoint_data.get('training_metrics'):
+                    metrics = checkpoint_data['training_metrics']
+                    loss_history = metrics.get('loss_history', [])
+                    learning_rate_history = metrics.get('learning_rates', [])
+                    
+                # Restore validation metrics if available
+                if checkpoint_data.get('metadata') and checkpoint_data['metadata'].get('validation_metrics'):
+                    validation_metrics = checkpoint_data['metadata']['validation_metrics']
+
+                print(f"✅ Resumed from checkpoint: {args.resume}")
+                print(f"   Starting from Step: {completed_steps + 1}, Epoch: {starting_epoch}")
+                print(f"   Best loss restored: {best_loss}")
+                print(f"   Loss history entries: {len(loss_history)}")
+                print(f"   Training will continue from global step {completed_steps + 1}")
+                
+            else:
+                print(f"⚠️ Failed to load checkpoint data from {args.resume} or checkpoint was empty. Starting fresh.")
+                args.resume = None
+                
+        except Exception as e:
+            print(f"❌ Error loading checkpoint {args.resume}: {e}")
+            print("   Starting training from scratch.")
+            args.resume = None
+            # Reset to defaults
+            completed_steps = 0
+            starting_epoch = 0
+            best_loss = float('inf')
+            loss_history = []
+            learning_rate_history = []
+            validation_metrics = {}
+    else:
+        print("🚀 Starting training from scratch (no resume checkpoint specified).")
+    
+    # Training loop with optimizations
+    print(f"\n📈 Starting optimized training loop...")
+    if args.resume:
+        print(f"🔄 Resuming training from step {completed_steps}, target: {config.max_steps}")
+    else:
+        print(f"🚀 Starting fresh training, target: {config.max_steps}")
+    start_time = time.time()
+    model.train()
     
     # Optimize progress bar
     progress_bar = tqdm(
@@ -202,6 +258,7 @@ def main():
         desc="Training",
         disable=not accelerator.is_local_main_process,
         dynamic_ncols=True,
+        initial=completed_steps,  # Start from resumed step
     )
     
     # Pre-allocate variables to reduce Python overhead
@@ -209,8 +266,20 @@ def main():
     save_steps = getattr(config, 'save_steps', 500)
     max_grad_norm = config.max_grad_norm
     
-    for epoch in range(100):  # Max 100 epochs
+    for epoch in range(starting_epoch, 100):  # Start from resumed epoch
+        # Calculate how many batches to skip in this epoch when resuming
+        batches_per_epoch = len(train_dataloader) 
+        if epoch == starting_epoch and completed_steps > 0:
+            # Calculate which batch in the current epoch we should start from
+            batches_completed_in_epoch = completed_steps % batches_per_epoch
+            print(f"🔄 Resuming epoch {epoch}: skipping {batches_completed_in_epoch} batches")
+        else:
+            batches_completed_in_epoch = 0
+            
         for step, batch in enumerate(train_dataloader):
+            # Skip batches if we're resuming mid-epoch
+            if step < batches_completed_in_epoch:
+                continue
             
             with accelerator.accumulate(model):
                 # Forward pass - batch is already on correct device via accelerator.prepare
