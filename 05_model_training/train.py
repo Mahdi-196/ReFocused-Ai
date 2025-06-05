@@ -329,13 +329,18 @@ def main():
             'effective_batch_size': effective_batch,
         }
         
+        # IMPORTANT: Use unique step number for final checkpoint to prevent race conditions
+        # If training ends at step 1000, the last regular save creates: checkpoint-epoch0-step1000-files0
+        # We must use a different step number to avoid "File shrank" errors from concurrent directory access
+        final_step = completed_steps + 1  # Creates: checkpoint-epoch0-step1001-files0 (unique directory)
+        
         checkpoint_manager.save_checkpoint(
             accelerator=accelerator,
             model=model,
             optimizer=optimizer,
             scheduler=lr_scheduler,
             epoch=epoch,
-            step=completed_steps,
+            step=final_step,  # Use incremented step to create unique directory name
             files_processed=completed_steps // len(train_dataloader),
             training_config=config,
             current_loss=current_loss,
@@ -349,6 +354,7 @@ def main():
                 'training_summary': {
                     'completed': True,
                     'total_time': training_time,
+                    'actual_steps_completed': completed_steps,  # Track actual steps completed
                     'performance': {
                         'steps_per_second': steps_per_second,
                         'effective_batch_size': effective_batch,
