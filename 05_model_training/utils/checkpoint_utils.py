@@ -30,19 +30,27 @@ class CheckpointManager:
         # Track background upload processes
         self.upload_processes = []
         
-        # Initialize authenticated GCS client with project/credentials
-        # Ensures GOOGLE_APPLICATION_CREDENTIALS and GOOGLE_CLOUD_PROJECT are used
-        self.client = storage.Client()
-        self.bucket = self.client.bucket(bucket_name)
-        
-        print(f"Initialized authenticated GCS client for bucket: {bucket_name}")
+        try:
+            self.client = storage.Client()
+            self.bucket = self.client.bucket(bucket_name)
+            print(f"Initialized authenticated GCS client for bucket: {bucket_name}")
+        except Exception as e:
+            print(f"⚠️ Failed to initialize GCS client in __init__: {e}")
+            print("   Uploads might fail. Check GCS authentication outside CheckpointManager.")
+            self.client = None
+            self.bucket = None
     
     def _ensure_client(self):
-        """Lazy initialization of GCS client to avoid pickling issues"""
-        if self.client is None:
-            # Use authenticated client instead of anonymous
-            self.client = storage.Client()
-            self.bucket = self.client.bucket(self.bucket_name)
+        """Lazy initialization or re-initialization of GCS client."""
+        if self.client is None or self.bucket is None:
+            try:
+                print("🔄 Attempting to (re)initialize GCS client...")
+                self.client = storage.Client()
+                self.bucket = self.client.bucket(self.bucket_name)
+                print(f"✅ GCS client (re)initialized for bucket: {self.bucket_name}")
+            except Exception as e:
+                print(f"❌ Failed to (re)initialize GCS client: {e}")
+                # self.client and self.bucket remain None or in their previous state
     
     def save_checkpoint(self,
                        accelerator,
@@ -164,78 +172,88 @@ class CheckpointManager:
         return checkpoint_name
     
     def _upload_to_gcs_background(self, local_dir: str, checkpoint_name: str):
-        """Upload checkpoint directory to GCS in background using tar + gsutil"""
-        print(f"🚀 Starting background upload for {checkpoint_name}")
+        """Create tarball in the calling thread, then upload tarball in a background thread."""
+        print(f"🚀 Preparing background upload for {checkpoint_name}")
         
-        # Clean up completed processes
-        self._cleanup_upload_processes()
+        tar_path = f"{local_dir}.tar.gz"
+        try:
+            print(f"Creating tar archive: {tar_path} from {local_dir}")
+            # Ensure the local_dir actually exists before tarring
+            if not os.path.isdir(local_dir):
+                print(f"❌ Source directory for tar does not exist: {local_dir}")
+                return
+
+            tar_result = subprocess.run(
+                ["tar", "czf", tar_path, "-C", os.path.dirname(local_dir), os.path.basename(local_dir)],
+                capture_output=True, text=True, check=False  # Changed to check=False to inspect result
+            )
+            if tar_result.returncode != 0:
+                print(f"❌ Failed to create tar archive for {checkpoint_name}. Stderr: {tar_result.stderr}")
+                if os.path.exists(tar_path): 
+                    os.remove(tar_path)  # Clean up partial tar
+                return
+            print(f"✅ Tar archive created for {checkpoint_name}")
+
+        except Exception as e:  # Catch other exceptions like FileNotFoundError for tar command
+            print(f"❌ Exception during tar creation for {checkpoint_name}: {e}")
+            if os.path.exists(tar_path): 
+                os.remove(tar_path)
+            return
+
+        self._cleanup_upload_processes()  # Clean up list of finished threads
         
-        # Start background upload in a thread
         upload_thread = threading.Thread(
-            target=self._background_upload_worker,
-            args=(local_dir, checkpoint_name),
+            target=self._background_upload_tar_worker,  # New worker function
+            args=(tar_path, checkpoint_name),          # Pass tar_path
             daemon=True
         )
         upload_thread.start()
         self.upload_processes.append(upload_thread)
         
-        print(f"✅ Checkpoint {checkpoint_name} queued for background upload")
+        print(f"✅ Checkpoint tarball {checkpoint_name}.tar.gz queued for background upload")
     
-    def _background_upload_worker(self, local_dir: str, checkpoint_name: str):
-        """Background worker for uploading checkpoint to GCS"""
+    def _background_upload_tar_worker(self, tar_path: str, checkpoint_name: str):
+        """Background worker to upload a pre-made tarball using gsutil and then delete the local tarball."""
         try:
-            # Get the current environment that Python sees
+            gsutil_executable_path = shutil.which("gsutil")
+            if gsutil_executable_path is None:
+                print(f"⚠️ gsutil not found. Cannot perform background upload for {tar_path}.")
+                if os.path.exists(tar_path):  # Clean up tarball if gsutil not found
+                     os.remove(tar_path)
+                     print(f"🗑️ Cleaned up unused tarball {tar_path} as gsutil is not found.")
+                return
+            
+            bucket_uri = f"gs://{self.bucket_name}/{self.checkpoint_path}/{checkpoint_name}.tar.gz"
+            print(f"☁️ Uploading {tar_path} to {bucket_uri} using gsutil...")
+            
             current_env = os.environ.copy()
             gac_path = current_env.get('GOOGLE_APPLICATION_CREDENTIALS')
-            
-            # Add debugging to check if the variable is visible here
+            # Your debug print for GAC path:
             print(f"BACKGROUND UPLOAD DEBUG: GOOGLE_APPLICATION_CREDENTIALS for gsutil: {gac_path}")
-            
+
             if gac_path is None:
-                print(f"❌ BACKGROUND UPLOAD ERROR: Secret key (GOOGLE_APPLICATION_CREDENTIALS) is MISSING for gsutil!")
-                print(f"   Falling back to Python GCS client upload")
-                self._upload_to_gcs(local_dir, checkpoint_name)
+                print(f"❌ THREAD ERROR: GOOGLE_APPLICATION_CREDENTIALS not found for gsutil for {checkpoint_name}!")
+                # Do not delete tar_path here as upload won't be attempted
                 return
+
+            upload_result = subprocess.run(
+                [gsutil_executable_path, "-m", "cp", tar_path, bucket_uri],
+                capture_output=True, text=True, env=current_env
+            )
             
-            # Check if gsutil is available (cross-platform)
-            import shutil
-            gsutil_path = shutil.which("gsutil")
-            if gsutil_path is None:
-                print(f"⚠️  gsutil not found, falling back to Python GCS client upload")
-                self._upload_to_gcs(local_dir, checkpoint_name)
-                return
-            
-            # Create tar.gz archive
-            tar_path = f"{local_dir}.tar.gz"
-            result = subprocess.run([
-                "tar", "czf", tar_path, "-C", os.path.dirname(local_dir),
-                os.path.basename(local_dir)
-            ], capture_output=True, text=True, env=current_env)
-            
-            if result.returncode != 0:
-                print(f"❌ Failed to create tar archive: {result.stderr}")
-                return
-            
-            # Upload using gsutil with multithreaded copy
-            bucket_uri = f"gs://{self.bucket_name}/{self.checkpoint_path}/{checkpoint_name}.tar.gz"
-            print(f"☁️  Uploading to {bucket_uri}")
-            
-            # Use the full path to gsutil and pass the environment
-            result = subprocess.run([
-                gsutil_path, "-m", "cp", tar_path, bucket_uri
-            ], capture_output=True, text=True, env=current_env)
-            
-            if result.returncode == 0:
-                print(f"✅ Successfully uploaded {checkpoint_name}")
-                # Clean up the tar file after successful upload
+            if upload_result.returncode == 0:
+                print(f"✅ Successfully uploaded {checkpoint_name}.tar.gz")
+                # Clean up the local tar file ONLY after successful upload
                 if os.path.exists(tar_path):
                     os.remove(tar_path)
-                    print(f"🗑️  Cleaned up {tar_path}")
+                    print(f"🗑️ Cleaned up uploaded tarball {tar_path}")
             else:
-                print(f"❌ Failed to upload {checkpoint_name}: {result.stderr}")
-                
+                print(f"❌ Failed to upload {checkpoint_name}.tar.gz using gsutil. Stderr: {upload_result.stderr}")
+                # Keep tar_path for debugging if upload failed
+
         except Exception as e:
-            print(f"❌ Background upload error for {checkpoint_name}: {e}")
+            print(f"❌ Exception in background tarball upload worker for {checkpoint_name}: {e}")
+            # Keep tar_path for debugging
     
     def _cleanup_upload_processes(self):
         """Remove completed upload threads from tracking"""
@@ -253,72 +271,62 @@ class CheckpointManager:
         print("✅ All background uploads completed")
     
     def _upload_to_gcs(self, local_dir: str, checkpoint_name: str):
-        """Upload checkpoint directory to GCS (synchronous fallback)"""
-        print(f"Uploading checkpoint to gs://{self.bucket_name}/{self.checkpoint_path}/{checkpoint_name}")
-        
-        try:
-            # Ensure we have a valid client and bucket
-            if not hasattr(self, 'client') or self.client is None:
-                print("🔄 Initializing GCS client for upload...")
-                self.client = storage.Client()
-                self.bucket = self.client.bucket(self.bucket_name)
-            
-            # Test client connection first
-            try:
-                # Try to access bucket metadata to verify authentication
-                _ = self.bucket.exists()
-                print("✅ GCS client authenticated successfully")
-            except Exception as auth_error:
-                print(f"❌ GCS authentication failed: {auth_error}")
-                print("   Check GOOGLE_APPLICATION_CREDENTIALS and GOOGLE_CLOUD_PROJECT environment variables")
-                return
-            
-            uploaded_files = 0
-            total_files = sum(len(files) for _, _, files in os.walk(local_dir))
-            
-            print(f"📁 Uploading {total_files} files...")
-            
-            for root, dirs, files in os.walk(local_dir):
-                for file in files:
-                    local_file_path = os.path.join(root, file)
-                    
-                    # Create relative path for GCS
-                    relative_path = os.path.relpath(local_file_path, local_dir)
-                    gcs_path = f"{self.checkpoint_path}/{checkpoint_name}/{relative_path}"
-                    
-                    try:
-                        # Upload file with proper prefix
-                        blob = self.bucket.blob(gcs_path)
-                        blob.upload_from_filename(local_file_path)
-                        uploaded_files += 1
-                        
-                        if uploaded_files % 10 == 0 or uploaded_files == total_files:
-                            print(f"   📤 Uploaded {uploaded_files}/{total_files} files")
-                            
-                    except Exception as upload_error:
-                        print(f"❌ Failed to upload {relative_path}: {upload_error}")
-                        raise  # Re-raise to stop the upload process
-            
-            print(f"✅ Checkpoint uploaded successfully ({uploaded_files} files)")
-            
-        except Exception as e:
-            print(f"❌ Upload to GCS failed: {e}")
-            print("   This may be due to authentication issues or network problems")
-            # Don't raise the exception to prevent training interruption
+        """Upload checkpoint directory to GCS (synchronous fallback)."""
+        print(f"SYNC UPLOAD: Uploading checkpoint to gs://{self.bucket_name}/{self.checkpoint_path}/{checkpoint_name}")
+        self._ensure_client()  # Make sure client is initialized
+        if self.client is None or self.bucket is None:
+            print("❌ SYNC UPLOAD: GCS client not available. Skipping upload.")
             return
+
+        try:
+            # Test client connection
+            _ = list(self.bucket.list_blobs(max_results=1))  # More reliable check than bucket.exists() for some permissions
+            print("✅ SYNC UPLOAD: GCS client authenticated and bucket accessible.")
+        except Exception as auth_error:
+            print(f"❌ SYNC UPLOAD: GCS authentication/access failed: {auth_error}")
+            return
+            
+        uploaded_files = 0
+        total_files = sum(len(files) for _, _, files in os.walk(local_dir))
+        print(f"📁 SYNC UPLOAD: Uploading {total_files} files...")
+        
+        for root, _, files in os.walk(local_dir):
+            for file_name in files:
+                local_file_path = os.path.join(root, file_name)
+                relative_path = os.path.relpath(local_file_path, local_dir)
+                gcs_path = f"{self.checkpoint_path}/{checkpoint_name}/{relative_path}"
+                try:
+                    blob = self.bucket.blob(gcs_path)
+                    blob.upload_from_filename(local_file_path)
+                    uploaded_files += 1
+                    if uploaded_files % 10 == 0 or uploaded_files == total_files:
+                        print(f"  📤 SYNC UPLOAD: Uploaded {uploaded_files}/{total_files} files")
+                except Exception as upload_error:
+                    print(f"❌ SYNC UPLOAD: Failed to upload {relative_path}: {upload_error}")
+                    # Decide if you want to stop all uploads on first error or continue
+                    return  # Stopping on first error for now
+        print(f"✅ SYNC UPLOAD: Checkpoint uploaded successfully ({uploaded_files} files)")
     
-    def _cleanup_old_checkpoints(self, keep_last: int = 3):
-        """Remove old local checkpoints to save disk space"""
+    def _cleanup_old_checkpoints(self, keep_last: int = 3):  # Default keep_last = 3
+        """Remove old local checkpoint directories to save disk space."""
+        # Ensure local_dir exists
+        if not os.path.isdir(self.local_dir):
+            return
+
         checkpoints = sorted([
             d for d in os.listdir(self.local_dir) 
             if os.path.isdir(os.path.join(self.local_dir, d)) and d.startswith('checkpoint-')
         ])
         
         if len(checkpoints) > keep_last:
-            for checkpoint in checkpoints[:-keep_last]:
-                checkpoint_path = os.path.join(self.local_dir, checkpoint)
-                print(f"🗑️  Removing old checkpoint: {checkpoint_path}")
-                shutil.rmtree(checkpoint_path)
+            checkpoints_to_delete = checkpoints[:-keep_last]  # These are the oldest ones
+            for checkpoint_name_to_delete in checkpoints_to_delete:
+                checkpoint_path_to_delete = os.path.join(self.local_dir, checkpoint_name_to_delete)
+                print(f"🗑️ Removing old checkpoint directory: {checkpoint_path_to_delete}")
+                try:
+                    shutil.rmtree(checkpoint_path_to_delete)
+                except Exception as e:
+                    print(f"⚠️ Failed to remove {checkpoint_path_to_delete}: {e}")
     
     def load_checkpoint(self, accelerator, checkpoint_name: str, scheduler=None):
         """Load checkpoint from GCS with comprehensive state restoration"""
