@@ -25,21 +25,28 @@ else
     echo "⚠️  No virtual environment found (venv directory missing)"
 fi
 
-# Set up authentication
+# Set up authentication using an absolute path
+# Get the absolute path to the directory where this script is located
+SCRIPT_DIR_PATH=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+CRED_FILE_NAME="black-dragon-461023-t5-93452a49f86b.json"
+# Construct the absolute path to the credentials file
+ABS_CRED_PATH="${SCRIPT_DIR_PATH}/credentials/${CRED_FILE_NAME}"
+
 echo "🔐 Setting up Google Cloud authentication..."
-export GOOGLE_APPLICATION_CREDENTIALS="./credentials/black-dragon-461023-t5-93452a49f86b.json"
+export GOOGLE_APPLICATION_CREDENTIALS="${ABS_CRED_PATH}"
 export GOOGLE_CLOUD_PROJECT="black-dragon-461023-t5"
 
-# Verify credentials exist
+# Verify credentials exist (this will now use the absolute path)
 if [[ ! -f "$GOOGLE_APPLICATION_CREDENTIALS" ]]; then
     echo "❌ Credentials file not found: $GOOGLE_APPLICATION_CREDENTIALS"
-    echo "   Please ensure your service account key is in the credentials folder"
+    echo "   (Checked absolute path based on script location)"
+    echo "   Please ensure your service account key is in the 'credentials' folder relative to the script"
     exit 1
 fi
 
 echo "✅ Authentication configured"
 echo "   Project: $GOOGLE_CLOUD_PROJECT"
-echo "   Credentials: $GOOGLE_APPLICATION_CREDENTIALS"
+echo "   Credentials (absolute path): $GOOGLE_APPLICATION_CREDENTIALS" # Now explicitly states absolute path
 
 # Test GCS permissions
 echo "🧪 Testing Google Cloud Storage permissions..."
@@ -202,4 +209,4 @@ else
     echo ""
     echo "❌ Training failed. Check logs above for details."
     exit 1
-fi 
+fi
