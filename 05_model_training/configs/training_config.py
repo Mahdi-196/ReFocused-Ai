@@ -78,7 +78,7 @@ def get_training_config(config_type: str = "test") -> TrainingConfig:
     
     elif config_type == "production":
         return TrainingConfig(
-            max_files=-1,  # All files
+            max_files=5,  # All files
             max_steps=25000,       # Optimal for 51B token dataset (0.016 epochs)
             per_device_train_batch_size=4,  # Optimal for 2 GPU setup
             gradient_accumulation_steps=4,  # Effective batch size = 4 * 4 * 2 GPUs = 32k tokens/step

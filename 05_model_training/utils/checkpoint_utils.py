@@ -184,6 +184,19 @@ class CheckpointManager:
     def _background_upload_worker(self, local_dir: str, checkpoint_name: str):
         """Background worker for uploading checkpoint to GCS"""
         try:
+            # Get the current environment that Python sees
+            current_env = os.environ.copy()
+            gac_path = current_env.get('GOOGLE_APPLICATION_CREDENTIALS')
+            
+            # Add debugging to check if the variable is visible here
+            print(f"BACKGROUND UPLOAD DEBUG: GOOGLE_APPLICATION_CREDENTIALS for gsutil: {gac_path}")
+            
+            if gac_path is None:
+                print(f"❌ BACKGROUND UPLOAD ERROR: Secret key (GOOGLE_APPLICATION_CREDENTIALS) is MISSING for gsutil!")
+                print(f"   Falling back to Python GCS client upload")
+                self._upload_to_gcs(local_dir, checkpoint_name)
+                return
+            
             # Check if gsutil is available (cross-platform)
             import shutil
             gsutil_path = shutil.which("gsutil")
@@ -197,7 +210,7 @@ class CheckpointManager:
             result = subprocess.run([
                 "tar", "czf", tar_path, "-C", os.path.dirname(local_dir),
                 os.path.basename(local_dir)
-            ], capture_output=True, text=True)
+            ], capture_output=True, text=True, env=current_env)
             
             if result.returncode != 0:
                 print(f"❌ Failed to create tar archive: {result.stderr}")
@@ -207,9 +220,10 @@ class CheckpointManager:
             bucket_uri = f"gs://{self.bucket_name}/{self.checkpoint_path}/{checkpoint_name}.tar.gz"
             print(f"☁️  Uploading to {bucket_uri}")
             
+            # Use the full path to gsutil and pass the environment
             result = subprocess.run([
-                "gsutil", "-m", "cp", tar_path, bucket_uri
-            ], capture_output=True, text=True)
+                gsutil_path, "-m", "cp", tar_path, bucket_uri
+            ], capture_output=True, text=True, env=current_env)
             
             if result.returncode == 0:
                 print(f"✅ Successfully uploaded {checkpoint_name}")
