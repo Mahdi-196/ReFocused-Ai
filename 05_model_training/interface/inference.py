@@ -41,7 +41,62 @@ print(f"🖥️  Device: {DEVICE}")
 print(f"🔥 CUDA Available: {torch.cuda.is_available()}")
 if torch.cuda.is_available():
     print(f"🎮 CUDA Device: {torch.cuda.get_device_name()}")
+
+# Early credential check to provide helpful feedback
+print("\n🔐 Checking Google Cloud Storage credentials...")
+credentials_available = setup_gcs_credentials()
+if credentials_available:
+    print("✅ GCS access enabled - bucket downloads available")
+else:
+    print("⚠️  GCS access disabled - only local checkpoints and manual paths available")
+
 print("=" * 70)
+
+# ============================================================================
+# CREDENTIAL SETUP AND VALIDATION
+# ============================================================================
+
+def setup_gcs_credentials():
+    """Setup and validate Google Cloud Storage credentials"""
+    
+    # Check if environment variable is already set
+    if os.environ.get('GOOGLE_APPLICATION_CREDENTIALS'):
+        cred_path = os.environ['GOOGLE_APPLICATION_CREDENTIALS']
+        if os.path.exists(cred_path):
+            print(f"✅ Using credentials from environment: {cred_path}")
+            return True
+        else:
+            print(f"⚠️  Environment variable set but file not found: {cred_path}")
+    
+    # Look for credentials in common project locations
+    possible_cred_paths = [
+        # Relative to project root
+        "../credentials/black-dragon-461023-t5-93452a49f86b.json",
+        "../../credentials/black-dragon-461023-t5-93452a49f86b.json", 
+        # Relative to current directory
+        "./credentials/black-dragon-461023-t5-93452a49f86b.json",
+        # Absolute paths (common locations)
+        os.path.expanduser("~/ReFocused-Ai/05_model_training/credentials/black-dragon-461023-t5-93452a49f86b.json"),
+        os.path.expanduser("~/credentials/black-dragon-461023-t5-93452a49f86b.json"),
+    ]
+    
+    for cred_path in possible_cred_paths:
+        if os.path.exists(cred_path):
+            abs_path = os.path.abspath(cred_path)
+            os.environ['GOOGLE_APPLICATION_CREDENTIALS'] = abs_path
+            print(f"✅ Found and set credentials: {abs_path}")
+            return True
+    
+    print("⚠️  Google Cloud credentials not found. Checked locations:")
+    for path in possible_cred_paths:
+        print(f"   • {path}")
+    print("\n💡 To fix this:")
+    print("   1. Set environment variable:")
+    print("      export GOOGLE_APPLICATION_CREDENTIALS='/home/ubuntu/ReFocused-Ai/05_model_training/credentials/black-dragon-461023-t5-93452a49f86b.json'")
+    print("   2. Or place the credentials file in one of the above locations")
+    print("   3. Restart the script after setting credentials")
+    
+    return False
 
 # ============================================================================
 # CHECKPOINT DISCOVERY AND SELECTION
@@ -104,6 +159,11 @@ def list_bucket_checkpoints():
     """List available checkpoints in the GCS bucket"""
     try:
         print("☁️  Connecting to Google Cloud Storage...")
+        
+        # Check if credentials are available (silent check)
+        if not os.environ.get('GOOGLE_APPLICATION_CREDENTIALS'):
+            return []
+        
         client = storage.Client()
         bucket = client.bucket(BUCKET_NAME)
         
@@ -131,6 +191,11 @@ def list_bucket_checkpoints():
 def download_checkpoint_from_bucket(checkpoint_name, local_dir="./downloaded_checkpoints"):
     """Download a checkpoint from GCS bucket"""
     print(f"📥 Downloading checkpoint '{checkpoint_name}' from bucket...")
+    
+    # Check if credentials are available
+    if not os.environ.get('GOOGLE_APPLICATION_CREDENTIALS'):
+        print("❌ Cannot download without valid credentials")
+        return None
     
     os.makedirs(local_dir, exist_ok=True)
     local_checkpoint_path = os.path.join(local_dir, checkpoint_name)
