@@ -167,8 +167,9 @@ class CheckpointManager:
             else:
                 self._upload_to_gcs(local_checkpoint_dir, checkpoint_name)
             
-            # Clean up old local checkpoints to save space
-            self._cleanup_old_checkpoints()
+            # DISABLED: Clean up old local checkpoints to save space
+            # Now handled by individual background workers to prevent race conditions
+            # self._cleanup_old_checkpoints()
         
         return checkpoint_name
     
@@ -194,9 +195,10 @@ class CheckpointManager:
         print(f"✅ Checkpoint {checkpoint_name} queued for background tar creation and upload")
     
     def _background_upload_tar_worker(self, local_dir: str, checkpoint_name: str):
-        """Background worker to create tarball and upload it using gsutil, then clean up."""
+        """Background worker to create tarball, upload it using gsutil, then clean up source directory."""
         temp_boto_file = None  # Initialize
         tar_path = f"{local_dir}.tar.gz"
+        upload_successful_flag = False  # Keep track of upload success
         
         try:
             # First, create the tar archive in the background thread
@@ -215,7 +217,7 @@ class CheckpointManager:
                 print(f"❌ [BACKGROUND] Failed to create tar archive for {checkpoint_name}. Stderr: {tar_result.stderr}")
                 if os.path.exists(tar_path): 
                     os.remove(tar_path)  # Clean up partial tar
-                return
+                return  # Exit if tar creation failed
             print(f"✅ [BACKGROUND] Tar archive created for {checkpoint_name}")
 
             # Now proceed with gsutil upload
@@ -225,7 +227,7 @@ class CheckpointManager:
                 if os.path.exists(tar_path):
                     os.remove(tar_path)
                     print(f"🗑️ [BACKGROUND] Cleaned up unused tarball {tar_path} as gsutil is not found.")
-                return
+                return  # Exit if gsutil not found
 
             bucket_uri = f"gs://{self.bucket_name}/{self.checkpoint_path}/{checkpoint_name}.tar.gz"
             print(f"☁️ [BACKGROUND] Uploading {tar_path} to {bucket_uri} using gsutil...")
@@ -236,7 +238,7 @@ class CheckpointManager:
 
             if gac_path is None:
                 print(f"❌ [BACKGROUND] GOOGLE_APPLICATION_CREDENTIALS not found for gsutil for {checkpoint_name}!")
-                # Do not delete tar_path here as upload won't be attempted
+                # tar_path might still exist, consider if it should be cleaned up or kept for manual upload
                 return
 
             # --- START: Create and use temporary Boto config ---
@@ -260,25 +262,40 @@ class CheckpointManager:
 
             if upload_result.returncode == 0:
                 print(f"✅ [BACKGROUND] Successfully uploaded {checkpoint_name}.tar.gz")
+                upload_successful_flag = True  # Mark upload as successful
+                # Clean up the local tar file ONLY after successful upload
                 if os.path.exists(tar_path):
                     os.remove(tar_path)
                     print(f"🗑️ [BACKGROUND] Cleaned up uploaded tarball {tar_path}")
             else:
                 print(f"❌ [BACKGROUND] Failed to upload {checkpoint_name}.tar.gz using gsutil. Stderr: {upload_result.stderr}")
-                # Keep tar_path for debugging if upload failed
+                # If upload failed, we might want to keep the tarball for manual upload/debug
+                print(f"ℹ️ [BACKGROUND] Keeping local tarball (if created): {tar_path} due to upload failure.")
 
         except Exception as e:
             print(f"❌ [BACKGROUND] Exception during tar creation/upload for {checkpoint_name}: {e}")
-            # Clean up tar file if it exists and there was an exception
+            # If an exception occurred after tar creation but before successful upload, tar_path might exist.
+            # For safety, let's assume if an exception happens, we might want to inspect the tarball.
             if os.path.exists(tar_path):
-                os.remove(tar_path)
-                print(f"🗑️ [BACKGROUND] Cleaned up tarball after exception: {tar_path}")
+                print(f"ℹ️ [BACKGROUND] Tarball {tar_path} may still exist locally after exception.")
         finally:
-            # --- START: Clean up temporary Boto config ---
+            # Clean up temporary Boto config
             if temp_boto_file and os.path.exists(temp_boto_file):
                 os.remove(temp_boto_file)
                 print(f"🗑️ [BACKGROUND] Cleaned up temporary Boto config: {temp_boto_file}")
-            # --- END: Clean up temporary Boto config ---
+
+            # NEW: Clean up the original local checkpoint directory if upload was successful
+            # This prevents race conditions with _cleanup_old_checkpoints
+            if upload_successful_flag:
+                if os.path.isdir(local_dir):
+                    print(f"🗑️ [BACKGROUND] Removing processed checkpoint directory: {local_dir}")
+                    try:
+                        shutil.rmtree(local_dir)
+                        print(f"✅ [BACKGROUND] Successfully removed directory: {local_dir}")
+                    except Exception as e_rm:
+                        print(f"⚠️ [BACKGROUND] Failed to remove directory {local_dir}: {e_rm}")
+            else:
+                print(f"ℹ️ [BACKGROUND] Keeping source directory {local_dir} as upload was not successful or tarring failed.")
     
     def _cleanup_upload_processes(self):
         """Remove completed upload threads from tracking"""
@@ -332,26 +349,28 @@ class CheckpointManager:
                     return  # Stopping on first error for now
         print(f"✅ SYNC UPLOAD: Checkpoint uploaded successfully ({uploaded_files} files)")
     
-    def _cleanup_old_checkpoints(self, keep_last: int = 3):  # Default keep_last = 3
-        """Remove old local checkpoint directories to save disk space."""
-        # Ensure local_dir exists
-        if not os.path.isdir(self.local_dir):
-            return
+    # DISABLED: _cleanup_old_checkpoints to prevent race conditions
+    # Each background worker now cleans up its own directory after successful upload
+    # def _cleanup_old_checkpoints(self, keep_last: int = 3):  # Default keep_last = 3
+    #     """Remove old local checkpoint directories to save disk space."""
+    #     # Ensure local_dir exists
+    #     if not os.path.isdir(self.local_dir):
+    #         return
 
-        checkpoints = sorted([
-            d for d in os.listdir(self.local_dir) 
-            if os.path.isdir(os.path.join(self.local_dir, d)) and d.startswith('checkpoint-')
-        ])
+    #     checkpoints = sorted([
+    #         d for d in os.listdir(self.local_dir) 
+    #         if os.path.isdir(os.path.join(self.local_dir, d)) and d.startswith('checkpoint-')
+    #     ])
         
-        if len(checkpoints) > keep_last:
-            checkpoints_to_delete = checkpoints[:-keep_last]  # These are the oldest ones
-            for checkpoint_name_to_delete in checkpoints_to_delete:
-                checkpoint_path_to_delete = os.path.join(self.local_dir, checkpoint_name_to_delete)
-                print(f"🗑️ Removing old checkpoint directory: {checkpoint_path_to_delete}")
-                try:
-                    shutil.rmtree(checkpoint_path_to_delete)
-                except Exception as e:
-                    print(f"⚠️ Failed to remove {checkpoint_path_to_delete}: {e}")
+    #     if len(checkpoints) > keep_last:
+    #         checkpoints_to_delete = checkpoints[:-keep_last]  # These are the oldest ones
+    #         for checkpoint_name_to_delete in checkpoints_to_delete:
+    #             checkpoint_path_to_delete = os.path.join(self.local_dir, checkpoint_name_to_delete)
+    #             print(f"🗑️ Removing old checkpoint directory: {checkpoint_path_to_delete}")
+    #             try:
+    #                 shutil.rmtree(checkpoint_path_to_delete)
+    #             except Exception as e:
+    #                 print(f"⚠️ Failed to remove {checkpoint_path_to_delete}: {e}")
     
     def load_checkpoint(self, accelerator, checkpoint_name: str, scheduler=None):
         """Load checkpoint from GCS with comprehensive state restoration"""
