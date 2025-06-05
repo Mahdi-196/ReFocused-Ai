@@ -173,67 +173,69 @@ class CheckpointManager:
         return checkpoint_name
     
     def _upload_to_gcs_background(self, local_dir: str, checkpoint_name: str):
-        """Create tarball in the calling thread, then upload tarball in a background thread."""
-        print(f"🚀 Preparing background upload for {checkpoint_name}")
+        """Launch background thread to create tarball and upload it."""
+        print(f"🚀 Queuing background upload for {checkpoint_name}")
         
-        tar_path = f"{local_dir}.tar.gz"
-        try:
-            print(f"Creating tar archive: {tar_path} from {local_dir}")
-            # Ensure the local_dir actually exists before tarring
-            if not os.path.isdir(local_dir):
-                print(f"❌ Source directory for tar does not exist: {local_dir}")
-                return
-
-            tar_result = subprocess.run(
-                ["tar", "czf", tar_path, "-C", os.path.dirname(local_dir), os.path.basename(local_dir)],
-                capture_output=True, text=True, check=False  # Changed to check=False to inspect result
-            )
-            if tar_result.returncode != 0:
-                print(f"❌ Failed to create tar archive for {checkpoint_name}. Stderr: {tar_result.stderr}")
-                if os.path.exists(tar_path): 
-                    os.remove(tar_path)  # Clean up partial tar
-                return
-            print(f"✅ Tar archive created for {checkpoint_name}")
-
-        except Exception as e:  # Catch other exceptions like FileNotFoundError for tar command
-            print(f"❌ Exception during tar creation for {checkpoint_name}: {e}")
-            if os.path.exists(tar_path): 
-                os.remove(tar_path)
+        # Ensure the local_dir actually exists before queuing
+        if not os.path.isdir(local_dir):
+            print(f"❌ Source directory for background upload does not exist: {local_dir}")
             return
 
         self._cleanup_upload_processes()  # Clean up list of finished threads
         
         upload_thread = threading.Thread(
-            target=self._background_upload_tar_worker,  # New worker function
-            args=(tar_path, checkpoint_name),          # Pass tar_path
+            target=self._background_upload_tar_worker,
+            args=(local_dir, checkpoint_name),  # Pass directory instead of tar_path
             daemon=True
         )
         upload_thread.start()
         self.upload_processes.append(upload_thread)
         
-        print(f"✅ Checkpoint tarball {checkpoint_name}.tar.gz queued for background upload")
+        print(f"✅ Checkpoint {checkpoint_name} queued for background tar creation and upload")
     
-    def _background_upload_tar_worker(self, tar_path: str, checkpoint_name: str):
-        """Background worker to upload a pre-made tarball using gsutil and then delete the local tarball."""
+    def _background_upload_tar_worker(self, local_dir: str, checkpoint_name: str):
+        """Background worker to create tarball and upload it using gsutil, then clean up."""
         temp_boto_file = None  # Initialize
+        tar_path = f"{local_dir}.tar.gz"
+        
         try:
+            # First, create the tar archive in the background thread
+            print(f"📦 [BACKGROUND] Creating tar archive: {tar_path} from {local_dir}")
+            
+            # Ensure the local_dir actually exists before tarring
+            if not os.path.isdir(local_dir):
+                print(f"❌ [BACKGROUND] Source directory for tar does not exist: {local_dir}")
+                return
+
+            tar_result = subprocess.run(
+                ["tar", "czf", tar_path, "-C", os.path.dirname(local_dir), os.path.basename(local_dir)],
+                capture_output=True, text=True, check=False
+            )
+            if tar_result.returncode != 0:
+                print(f"❌ [BACKGROUND] Failed to create tar archive for {checkpoint_name}. Stderr: {tar_result.stderr}")
+                if os.path.exists(tar_path): 
+                    os.remove(tar_path)  # Clean up partial tar
+                return
+            print(f"✅ [BACKGROUND] Tar archive created for {checkpoint_name}")
+
+            # Now proceed with gsutil upload
             gsutil_executable_path = shutil.which("gsutil")
             if gsutil_executable_path is None:
-                print(f"⚠️ gsutil not found. Cannot perform background upload for {tar_path}.")
+                print(f"⚠️ [BACKGROUND] gsutil not found. Cannot perform upload for {checkpoint_name}.")
                 if os.path.exists(tar_path):
                     os.remove(tar_path)
-                    print(f"🗑️ Cleaned up unused tarball {tar_path} as gsutil is not found.")
+                    print(f"🗑️ [BACKGROUND] Cleaned up unused tarball {tar_path} as gsutil is not found.")
                 return
 
             bucket_uri = f"gs://{self.bucket_name}/{self.checkpoint_path}/{checkpoint_name}.tar.gz"
-            print(f"☁️ Uploading {tar_path} to {bucket_uri} using gsutil...")
+            print(f"☁️ [BACKGROUND] Uploading {tar_path} to {bucket_uri} using gsutil...")
 
             current_env = os.environ.copy()
             gac_path = current_env.get('GOOGLE_APPLICATION_CREDENTIALS')
-            gcp_project = current_env.get('GOOGLE_CLOUD_PROJECT')  # Get project from env
+            gcp_project = current_env.get('GOOGLE_CLOUD_PROJECT')
 
             if gac_path is None:
-                print(f"❌ THREAD ERROR: GOOGLE_APPLICATION_CREDENTIALS not found for gsutil for {checkpoint_name}!")
+                print(f"❌ [BACKGROUND] GOOGLE_APPLICATION_CREDENTIALS not found for gsutil for {checkpoint_name}!")
                 # Do not delete tar_path here as upload won't be attempted
                 return
 
@@ -243,37 +245,39 @@ class CheckpointManager:
                 boto_config_content += f"[GSUtil]\ndefault_project_id = {gcp_project}\n"
             
             # Create a named temporary file to store the Boto config
-            # Delete=False is important on some OSes when passing the name to a subprocess
             with tempfile.NamedTemporaryFile(mode="w", delete=False) as tf:
                 tf.write(boto_config_content)
-                temp_boto_file = tf.name  # Get the path to the temporary file
+                temp_boto_file = tf.name
             
             current_env['BOTO_CONFIG'] = temp_boto_file
-            print(f"🔧 Using temporary Boto config for gsutil: {temp_boto_file}")
+            print(f"🔧 [BACKGROUND] Using temporary Boto config for gsutil: {temp_boto_file}")
             # --- END: Create and use temporary Boto config ---
 
             upload_result = subprocess.run(
-                [gsutil_executable_path, "-m", "cp", tar_path, bucket_uri],  # You can keep -m if preferred
+                [gsutil_executable_path, "-m", "cp", tar_path, bucket_uri],
                 capture_output=True, text=True, env=current_env
             )
 
             if upload_result.returncode == 0:
-                print(f"✅ Successfully uploaded {checkpoint_name}.tar.gz")
+                print(f"✅ [BACKGROUND] Successfully uploaded {checkpoint_name}.tar.gz")
                 if os.path.exists(tar_path):
                     os.remove(tar_path)
-                    print(f"🗑️ Cleaned up uploaded tarball {tar_path}")
+                    print(f"🗑️ [BACKGROUND] Cleaned up uploaded tarball {tar_path}")
             else:
-                print(f"❌ Failed to upload {checkpoint_name}.tar.gz using gsutil. Stderr: {upload_result.stderr}")
+                print(f"❌ [BACKGROUND] Failed to upload {checkpoint_name}.tar.gz using gsutil. Stderr: {upload_result.stderr}")
                 # Keep tar_path for debugging if upload failed
 
         except Exception as e:
-            print(f"❌ Exception in background tarball upload worker for {checkpoint_name}: {e}")
-            # Keep tar_path for debugging
+            print(f"❌ [BACKGROUND] Exception during tar creation/upload for {checkpoint_name}: {e}")
+            # Clean up tar file if it exists and there was an exception
+            if os.path.exists(tar_path):
+                os.remove(tar_path)
+                print(f"🗑️ [BACKGROUND] Cleaned up tarball after exception: {tar_path}")
         finally:
             # --- START: Clean up temporary Boto config ---
             if temp_boto_file and os.path.exists(temp_boto_file):
                 os.remove(temp_boto_file)
-                print(f"🗑️ Cleaned up temporary Boto config: {temp_boto_file}")
+                print(f"🗑️ [BACKGROUND] Cleaned up temporary Boto config: {temp_boto_file}")
             # --- END: Clean up temporary Boto config ---
     
     def _cleanup_upload_processes(self):
