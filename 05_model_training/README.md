@@ -12,6 +12,7 @@ ReFocused-AI is a high-performance training pipeline for a **1.2B parameter GPT-
 - **Multi-GPU scaling** with near-linear efficiency (1-8 GPUs supported)
 - **Mixed precision training** (bf16/fp16) for 2x speed + 50% memory savings
 - **Background checkpoint uploads** with zero training interruption
+- **Smart checkpoint resume** from both local and GCS checkpoints with full state restoration
 - **Smart data pipeline** with skip-existing downloads and nested folder preservation
 - **51B token dataset** with Reddit conversational data
 - **Real-time monitoring** with comprehensive metrics and TensorBoard integration
@@ -76,6 +77,13 @@ cd 05_model_training
 ./start_training.sh --config production --gpus 2
 # Expected: 4.5-6.5 steps/second, 85-95% scaling efficiency
 # Time: ~14 hours for 25,000 steps, 20 checkpoints
+```
+
+#### Resume from Checkpoint (Any Configuration)
+```bash
+# Resume training from specific checkpoint (works with local or GCS)
+./start_training.sh --config production --gpus 2 --resume checkpoint-epoch0-step10000-files2
+# Automatically downloads from GCS if not local, restores full training state
 ```
 
 #### Maximum Performance (8 GPUs) - 3 Full Epochs
@@ -253,7 +261,50 @@ def training_loop():
 - **Reduced Python overhead** for 5-15% training speed improvement
 - **Better error handling** and memory management
 
-### 3. Smart Data Pipeline with Resume Capability
+### 3. Smart Checkpoint Resume System
+```python
+# From train.py - Comprehensive checkpoint resume functionality
+def handle_checkpoint_resume(args, checkpoint_manager, accelerator, lr_scheduler):
+    """Smart checkpoint resume with full state restoration"""
+    if args.resume:
+        print(f"🔄 Attempting to resume training from checkpoint: {args.resume}")
+        try:
+            checkpoint_data = checkpoint_manager.load_checkpoint(
+                accelerator=accelerator,
+                checkpoint_name=args.resume,
+                scheduler=lr_scheduler
+            )
+            
+            if checkpoint_data and checkpoint_data.get('checkpoint_info'):
+                # Restore complete training state
+                chkp_info = checkpoint_data['checkpoint_info']
+                completed_steps = chkp_info.get('step', 0)
+                starting_epoch = chkp_info.get('epoch', 0)
+                best_loss = chkp_info.get('best_loss', float('inf'))
+                
+                # Restore training metrics and history
+                loss_history = checkpoint_data.get('training_metrics', {}).get('loss_history', [])
+                learning_rate_history = checkpoint_data.get('training_metrics', {}).get('learning_rates', [])
+                
+                print(f"✅ Resumed from checkpoint: {args.resume}")
+                print(f"   Starting from Step: {completed_steps + 1}, Epoch: {starting_epoch}")
+                print(f"   Best loss restored: {best_loss}")
+                return completed_steps, starting_epoch, best_loss, loss_history, learning_rate_history
+        except Exception as e:
+            print(f"❌ Error loading checkpoint {args.resume}: {e}")
+            print("   Starting training from scratch.")
+    
+    return 0, 0, float('inf'), [], []
+```
+
+**Resume Features:**
+- **Automatic GCS download** - fetches checkpoints from cloud storage if not local
+- **Complete state restoration** - model weights, optimizer state, scheduler, metrics
+- **Smart batch skipping** - resumes mid-epoch without reprocessing data
+- **Progress bar continuity** - starts from correct step count
+- **Error resilience** - graceful fallback to fresh training if resume fails
+
+### 4. Smart Data Pipeline with Resume Capability
 ```python
 # From download_training_data.py - Enhanced download system
 def download_with_resume(blob, data_dir):
@@ -372,6 +423,19 @@ accelerate config
 # - Dataset coverage: 0.016 epochs (1.6% of 51B tokens)
 ```
 
+#### Resume Interrupted Training
+```bash
+# Resume from any checkpoint (automatically downloads from GCS if needed)
+./start_training.sh --config production --gpus 2 --resume checkpoint-epoch0-step12500-files2
+
+# What happens on resume:
+# ✅ Downloads checkpoint from GCS if not local
+# ✅ Restores model weights, optimizer state, scheduler
+# ✅ Continues from step 12501 (not step 0)
+# ✅ Preserves loss history and best loss achieved
+# ✅ Skips already processed batches in current epoch
+```
+
 #### Maximum Quality Training
 ```bash
 # 8 GPU maximum performance (590K steps, 3 full epochs, ~8.2 hours)
@@ -389,6 +453,8 @@ accelerate config
 ## 🔍 Monitoring and Debugging
 
 ### Real-Time Training Output
+
+#### Fresh Training Start
 ```bash
 # Typical production training output from train.py
 🚀 Starting PRODUCTION training with optimizations
@@ -400,16 +466,44 @@ accelerate config
   torch.compile: enabled (device-aware)
   Background uploads: enabled
 
+🚀 Starting training from scratch (no resume checkpoint specified).
+
 📈 Starting optimized training loop...
+🚀 Starting fresh training, target: 25000
 Step 250: loss=2.4567, lr=1.96e-04, best=2.4234 | 5.2 steps/sec | GPU: 94%/95%
 Step 500: loss=2.3456, lr=1.94e-04, best=2.3234 | 5.4 steps/sec | GPU: 96%/94%  
+```
 
-🎯 Performance Summary (Step 1000):
+#### Resume Training Output
+```bash
+# Resume training output showing checkpoint loading
+🔄 Attempting to resume training from checkpoint: checkpoint-epoch0-step10000-files2
+📥 Downloading checkpoint from GCS...
+✅ Successfully downloaded checkpoint-epoch0-step10000-files2
+Loading checkpoint from ./checkpoints/checkpoint-epoch0-step10000-files2
+✅ Restored scheduler state
+✅ Loaded training metrics
+✅ Resumed from checkpoint: checkpoint-epoch0-step10000-files2
+   Starting from Step: 10001, Epoch: 0
+   Best loss restored: 2.1234
+   Loss history entries: 40
+   Training will continue from global step 10001
+
+📈 Starting optimized training loop...
+🔄 Resuming training from step 10000, target: 25000
+🔄 Resuming epoch 0: skipping 195 batches
+Step 10250: loss=2.1567, lr=1.84e-04, best=2.1234 | 5.3 steps/sec | GPU: 95%/96%
+```
+
+#### Performance Summary
+```bash
+🎯 Performance Summary (Step 15000):
    Average speed: 5.3 steps/second
    GPU utilization: 95% (both GPUs)
    Memory usage: 16.2GB / 24GB per GPU
    Scaling efficiency: 92%
    torch.compile optimization: active
+   Resume: Successfully continued from step 10000
 ```
 
 ### Performance Diagnostic Metrics
@@ -453,12 +547,16 @@ accelerate config                            # Configure multi-GPU settings
 ./start_training.sh --config production --gpus 2              # 2 GPU production (recommended)
 ./start_training.sh --config production_8gpu --gpus 8         # Maximum performance
 
+# Resume training from checkpoints
+./start_training.sh --config production --gpus 2 --resume checkpoint-epoch0-step10000-files2  # Resume from step 10000
+./start_training.sh --config test --resume checkpoint-epoch0-step500-files0                   # Resume test training
+
 # Advanced options
 ./start_training.sh --config production --gpus 2 --max-steps 50000  # Custom steps
-./start_training.sh --config production --gpus 2 --resume checkpoint-epoch0-step10000  # Resume training
+./start_training.sh --config production --gpus 4 --resume checkpoint-epoch0-step15000-files3 --max-steps 30000  # Resume + custom target
 ```
 
-### Monitoring Commands
+### Monitoring and Checkpoint Commands
 ```bash
 # Real-time monitoring
 nvidia-smi -l 1                              # GPU utilization (1 second intervals)
@@ -467,8 +565,78 @@ tail -f logs/training.log                    # Live training progress
 # Performance analysis
 tensorboard --logdir logs/ --port 6006       # TensorBoard dashboard
 
-# Storage and checkpoint management
-gsutil ls gs://refocused-ai/checkpoints/     # List uploaded checkpoints
+# Checkpoint management
+gsutil ls gs://refocused-ai/checkpoints/     # List available checkpoints in GCS
+ls -la ./checkpoints/                        # List local checkpoints
+python test_resume.py                        # Test resume functionality
+
+# Find and resume from latest checkpoint
+gsutil ls gs://refocused-ai/checkpoints/ | tail -1 | xargs -I {} ./start_training.sh --config production --gpus 2 --resume {}
+```
+
+---
+
+## 🔄 Checkpoint Resume System
+
+### How Resume Works
+The resume functionality automatically handles both **local and GCS checkpoints**:
+
+1. **Check Local First**: Looks for checkpoint in `./checkpoints/`
+2. **Download if Missing**: Automatically downloads from `gs://refocused-ai/checkpoints/` 
+3. **Complete State Restoration**: Restores model, optimizer, scheduler, metrics, and training progress
+4. **Smart Continuation**: Continues from exact step, skips processed batches
+
+### Resume Command Examples
+```bash
+# Basic resume (works with any checkpoint)
+./start_training.sh --config production --gpus 2 --resume checkpoint-epoch0-step12500-files2
+
+# Resume test training
+./start_training.sh --config test --resume checkpoint-epoch0-step500-files0
+
+# Resume with custom target steps
+./start_training.sh --config production --gpus 2 --resume checkpoint-epoch0-step10000-files2 --max-steps 30000
+```
+
+### Available Checkpoints
+Checkpoints are saved every 1,250 steps (5% intervals) in production training:
+- `checkpoint-epoch0-step1250-files0` (5% complete)
+- `checkpoint-epoch0-step2500-files0` (10% complete)  
+- `checkpoint-epoch0-step12500-files2` (50% complete)
+- `checkpoint-epoch0-step25000-files4` (100% complete)
+
+### Troubleshooting Resume Issues
+
+#### ✅ **Issue: "Training starts from step 0 instead of resuming"**
+**Fixed!** This was the main bug that has been resolved. The training script now properly calls `checkpoint_manager.load_checkpoint()` and restores all training state.
+
+#### **Issue: "Checkpoint not found"**
+```bash
+# Check available checkpoints
+gsutil ls gs://refocused-ai/checkpoints/
+ls -la ./checkpoints/
+
+# Verify exact checkpoint name format
+# Correct: checkpoint-epoch0-step1250-files0
+# Wrong:   checkpoint-step1250 (missing epoch and files)
+```
+
+#### **Issue: "Loss jumps after resume"**
+Check these messages in the output:
+- ✅ "Restored scheduler state"
+- ✅ "Loaded training metrics" 
+- ✅ "Best loss restored: X.XXXX"
+
+If missing, check GCS authentication and checkpoint integrity.
+
+#### **Issue: "GCS authentication failed"**
+```bash
+# Set up credentials
+export GOOGLE_APPLICATION_CREDENTIALS="./credentials/black-dragon-461023-t5-93452a49f86b.json"
+export GOOGLE_CLOUD_PROJECT="black-dragon-461023-t5"
+
+# Test access
+gsutil ls gs://refocused-ai/
 ```
 
 ---
