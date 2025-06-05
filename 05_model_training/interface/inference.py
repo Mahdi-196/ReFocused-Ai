@@ -17,7 +17,7 @@ import sys
 import subprocess
 import tempfile
 from pathlib import Path
-from transformers import AutoTokenizer, AutoModelForCausalLM
+from transformers import AutoConfig, AutoTokenizer, AutoModelForCausalLM
 from google.cloud import storage
 
 # ============================================================================
@@ -192,68 +192,85 @@ def list_bucket_checkpoints():
         print(f"⚠️  Could not access bucket: {e}")
         return []
 
-def download_checkpoint_from_bucket(checkpoint_name, local_dir="./downloaded_checkpoints"):
-    """Download a checkpoint from GCS bucket"""
-    print(f"📥 Downloading checkpoint '{checkpoint_name}' from bucket...")
-    
+def download_checkpoint_from_bucket(checkpoint_name, download_dir="./downloaded_checkpoints"):
+    """
+    Download a checkpoint from GCS. If it's a training checkpoint (missing config.json),
+    it will be automatically converted to an inference-ready format.
+    """
+    print(f"📥 Preparing checkpoint '{checkpoint_name}' from bucket...")
+
     # Check if credentials are available
     if not os.environ.get('GOOGLE_APPLICATION_CREDENTIALS'):
-        print("❌ Cannot download without valid credentials")
+        print("❌ Cannot download without valid GCS credentials.")
         return None
-    
-    os.makedirs(local_dir, exist_ok=True)
-    local_checkpoint_path = os.path.join(local_dir, checkpoint_name)
-    
-    try:
-        client = storage.Client()
-        bucket = client.bucket(BUCKET_NAME)
-        
-        # Try downloading tar.gz first (compressed format)
-        tar_blob_name = f"{BUCKET_CHECKPOINT_PATH}/{checkpoint_name}.tar.gz"
-        tar_blob = bucket.blob(tar_blob_name)
-        
-        if tar_blob.exists():
-            tar_path = f"{local_checkpoint_path}.tar.gz"
-            print(f"📦 Downloading compressed checkpoint...")
-            tar_blob.download_to_filename(tar_path)
-            
-            print(f"📦 Extracting checkpoint...")
-            subprocess.run([
-                "tar", "xzf", tar_path, 
-                "-C", local_dir
-            ], check=True)
-            os.remove(tar_path)
-            
-        else:
-            # Fallback to directory download
-            print(f"📁 Downloading checkpoint files...")
-            os.makedirs(local_checkpoint_path, exist_ok=True)
-            
-            prefix = f"{BUCKET_CHECKPOINT_PATH}/{checkpoint_name}/"
-            blobs = bucket.list_blobs(prefix=prefix)
-            
-            downloaded_files = 0
-            for blob in blobs:
-                if blob.name != prefix:  # Skip directory marker
-                    relative_path = blob.name[len(prefix):]
-                    local_file_path = os.path.join(local_checkpoint_path, relative_path)
-                    
-                    # Create directories if needed
-                    os.makedirs(os.path.dirname(local_file_path), exist_ok=True)
-                    
-                    blob.download_to_filename(local_file_path)
-                    downloaded_files += 1
-            
-            if downloaded_files == 0:
-                print(f"❌ No files found for checkpoint '{checkpoint_name}'")
+
+    os.makedirs(download_dir, exist_ok=True)
+    training_path = os.path.join(download_dir, checkpoint_name)
+
+    # Only download if the training checkpoint doesn't already exist
+    if not os.path.exists(training_path):
+        try:
+            client = storage.Client()
+            bucket = client.bucket(BUCKET_NAME)
+            tar_blob_name = f"{BUCKET_CHECKPOINT_PATH}/{checkpoint_name}.tar.gz"
+            tar_blob = bucket.blob(tar_blob_name)
+
+            if tar_blob.exists():
+                tar_path = f"{training_path}.tar.gz"
+                print(f"  -> Downloading compressed checkpoint...")
+                tar_blob.download_to_filename(tar_path)
+
+                print(f"  -> Extracting checkpoint to '{training_path}'...")
+                subprocess.run(["tar", "xzf", tar_path, "-C", download_dir], check=True)
+                os.remove(tar_path) # Clean up the tarball
+            else:
+                # Add logic for non-tarball downloads if needed, for now we assume tar.gz
+                print(f"❌ Compressed checkpoint '{tar_blob_name}' not found in bucket.")
                 return None
-        
-        print(f"✅ Successfully downloaded checkpoint to: {local_checkpoint_path}")
-        return local_checkpoint_path
-        
-    except Exception as e:
-        print(f"❌ Error downloading checkpoint: {e}")
-        return None
+
+        except Exception as e:
+            print(f"❌ Error during download/extraction: {e}")
+            return None
+    else:
+        print(f"✅ Found existing downloaded training checkpoint at '{training_path}'")
+
+    # --- NEW: CONVERSION LOGIC ---
+    # Check if the downloaded checkpoint needs to be converted
+    config_path = os.path.join(training_path, "config.json")
+    if not os.path.exists(config_path):
+        print("\n🔄 Training checkpoint detected. Converting to inference format...")
+        inference_path = os.path.join("./inference_ready_checkpoints", checkpoint_name)
+
+        try:
+            os.makedirs(inference_path, exist_ok=True)
+            BASE_MODEL_NAME = "EleutherAI/gpt-neox-20b"
+
+            print("  -> Loading base config and tokenizer...")
+            config = AutoConfig.from_pretrained(BASE_MODEL_NAME)
+            tokenizer = AutoTokenizer.from_pretrained(BASE_MODEL_NAME)
+
+            print("  -> Overwriting config with your 1.2B model's architecture...")
+            config.hidden_size = 2048
+            config.num_hidden_layers = 24
+            config.num_attention_heads = 16
+            config.intermediate_size = 8192
+            config.vocab_size = 50257
+
+            print("  -> Loading your trained weights into the model structure...")
+            model = AutoModelForCausalLM.from_pretrained(training_path, config=config)
+
+            print(f"  -> Saving new inference-ready checkpoint to '{inference_path}'...")
+            model.save_pretrained(inference_path)
+            tokenizer.save_pretrained(inference_path)
+
+            print(f"✅ Successfully converted. Using new path: {inference_path}")
+            return inference_path # IMPORTANT: Return the path to the NEW checkpoint
+        except Exception as e:
+            print(f"❌ Fatal error during conversion: {e}")
+            return None
+    else:
+        print("✅ Inference-ready checkpoint detected. No conversion needed.")
+        return training_path # It was already in the right format
 
 def select_checkpoint():
     """Interactive checkpoint selection"""
