@@ -33,7 +33,7 @@ class TrainingConfig:
     max_grad_norm: float = 1.0
     
     # Data loading optimization
-    dataloader_num_workers: int = 4  # Number of parallel data loading workers
+    dataloader_num_workers: int = 0  # Use main thread only (avoid multiprocessing overhead)
     pin_memory: bool = True  # Pin memory for faster GPU transfers
     drop_last: bool = True  # Drop incomplete batches for consistent training
     prefetch_factor: int = 2  # Number of batches to prefetch per worker
@@ -43,7 +43,7 @@ class TrainingConfig:
     fp16: bool = False  # Alternative to bf16 for older GPUs
     
     # Performance optimizations
-    compile_model: bool = False  # Use torch.compile for PyTorch 2.0+ (experimental)
+    compile_model: bool = True  # Use torch.compile for PyTorch 2.0+ (ESSENTIAL for H100 performance)
     use_flash_attention: bool = False  # Use flash attention if available
     
     # Checkpointing optimization
