@@ -90,14 +90,14 @@ def get_training_config(config_type: str = "test") -> TrainingConfig:
     
     elif config_type == "production_8gpu":
         return TrainingConfig(
-            max_files=-1,  # All files
+            max_files=5,  # All files
             max_steps=590625,      # 3 full epochs through 51B token dataset
             per_device_train_batch_size=8,  # Higher batch size per GPU (8 GPUs can handle it)
             gradient_accumulation_steps=4,  # Effective batch size = 8 * 4 * 8 GPUs = 256k tokens/step
             save_steps=20000,      # Save every 20000 steps (every ~3.4% of training, ~30 checkpoints)
             logging_steps=3000,    # Log every 3000 steps (every ~0.5% of training, ~200 logs)
             warmup_steps=11812,    # 2% of training for gradual learning rate ramp-up
-            dataloader_num_workers=0,  # Use main thread to prevent I/O bottleneck
+            dataloader_num_workers=4,  # Standard robust value for parallelism
             learning_rate=3e-4,    # Slightly higher LR for larger effective batch size
         )
     
