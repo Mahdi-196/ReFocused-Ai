@@ -70,7 +70,7 @@ def main():
     global checkpoint_manager
     
     parser = argparse.ArgumentParser(description="Train ReFocused-AI model")
-    parser.add_argument("--config", type=str, choices=["test", "production"], 
+    parser.add_argument("--config", type=str, choices=["test", "production", "production_8gpu"], 
                        default="test", help="Training configuration")
     parser.add_argument("--max-steps", type=int, default=None,
                        help="Override max steps")
