@@ -135,6 +135,7 @@ def main():
     # Initialize model
     model_config = get_model_config()
     model = GPTNeoXForCausalLM(model_config)
+    print(f"DEBUG 1: After creation, model type is {type(model)}")
     
     if accelerator.is_main_process:
         param_count = count_parameters(model)
@@ -165,6 +166,7 @@ def main():
     model, optimizer, train_dataloader, lr_scheduler = accelerator.prepare(
         model, optimizer, train_dataloader, lr_scheduler
     )
+    print(f"DEBUG 2: After accelerator.prepare, model type is {type(model)}")
     
     # Apply torch.compile after accelerator.prepare() for device-aware optimization
     if getattr(config, 'compile_model', False) and hasattr(torch, 'compile'):
@@ -172,6 +174,7 @@ def main():
         try:
             # Ensure we're calling torch.compile as a function, not assigning the function itself
             model = torch.compile(model)
+            print(f"DEBUG 3: After torch.compile, model type is {type(model)}")
             print("✅ Model compilation successful")
         except Exception as e:
             print(f"⚠️  Model compilation failed: {e}")
@@ -252,6 +255,7 @@ def main():
     else:
         print(f"🚀 Starting fresh training, target: {config.max_steps}")
     start_time = time.time()
+    print(f"DEBUG 4: Before model.train(), model type is {type(model)}")
     model.train()
     
     # Optimize progress bar
