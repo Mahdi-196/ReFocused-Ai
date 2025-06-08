@@ -170,10 +170,12 @@ def main():
     if getattr(config, 'compile_model', False) and hasattr(torch, 'compile'):
         print("🚀 Applying torch.compile after accelerator.prepare()...")
         try:
+            # Ensure we're calling torch.compile as a function, not assigning the function itself
             model = torch.compile(model)
             print("✅ Model compilation successful")
         except Exception as e:
             print(f"⚠️  Model compilation failed: {e}")
+            # Ensure model remains valid even if compilation fails
     
     # Initialize checkpoint manager
     checkpoint_manager = CheckpointManager(
