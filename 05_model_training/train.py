@@ -7,7 +7,6 @@ Enhanced with performance optimizations for H100 GPU utilization
 import os
 import sys
 import warnings
-import inspect
 
 # Suppress FutureWarnings from transformers and torch
 warnings.filterwarnings("ignore", category=FutureWarning)
@@ -172,7 +171,7 @@ def main():
     if getattr(config, 'compile_model', False) and hasattr(torch, 'compile'):
         print("🚀 Applying torch.compile after accelerator.prepare()...")
         try:
-            # Ensure we're calling torch.compile as a function, not assigning the function itself
+            # Correct way to compile the entire model object, not just the forward function
             model = torch.compile(model)
             print("✅ Model compilation successful")
         except Exception as e:
@@ -254,26 +253,7 @@ def main():
     else:
         print(f"🚀 Starting fresh training, target: {config.max_steps}")
     start_time = time.time()
-    
-    # --- START: Decisive Debug Block ---
-    print("--- RUNNING DECISIVE DEBUG ---")
-    if callable(model):
-        print("!!! ERROR: 'model' is a FUNCTION.")
-        try:
-            print(f"    Function Name: {model.__name__}")
-            print(f"    Module: {model.__module__}")
-            print("--- SOURCE CODE OF THE FUNCTION ---")
-            print(inspect.getsource(model))
-            print("---------------------------------")
-        except Exception as e:
-            print(f"    Could not inspect the function: {e}")
-    else:
-        print(f"??? OK?: 'model' is not a function. Type is {type(model)}")
-    
-    import sys
-    print("--- DEBUG COMPLETE. Exiting now. ---")
-    sys.exit(1) # Exit with an error code to stop the script cleanly.
-    # --- END: Decisive Debug Block ---
+    model.train()
     
     # Optimize progress bar
     progress_bar = tqdm(
