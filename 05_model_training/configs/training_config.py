@@ -97,7 +97,7 @@ def get_training_config(config_type: str = "test") -> TrainingConfig:
             save_steps=20000,      # Save every 20000 steps (every ~3.4% of training, ~30 checkpoints)
             logging_steps=3000,    # Log every 3000 steps (every ~0.5% of training, ~200 logs)
             warmup_steps=11812,    # 2% of training for gradual learning rate ramp-up
-            dataloader_num_workers=6,  # Higher parallelism for 8 GPU setup
+            dataloader_num_workers=0,  # Use main thread to prevent I/O bottleneck
             learning_rate=3e-4,    # Slightly higher LR for larger effective batch size
         )
     
