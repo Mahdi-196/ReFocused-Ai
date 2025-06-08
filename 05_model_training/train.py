@@ -168,15 +168,15 @@ def main():
     )
     
     # Apply torch.compile after accelerator.prepare() for device-aware optimization
-    if getattr(config, 'compile_model', False) and hasattr(torch, 'compile'):
-        print("🚀 Applying torch.compile after accelerator.prepare()...")
-        try:
-            # Correct way to compile the entire model object, not just the forward function
-            model = torch.compile(model)
-            print("✅ Model compilation successful")
-        except Exception as e:
-            print(f"⚠️  Model compilation failed: {e}")
-            # Ensure model remains valid even if compilation fails
+    # if getattr(config, 'compile_model', False) and hasattr(torch, 'compile'):
+    #     print("🚀 Applying torch.compile after accelerator.prepare()...")
+    #     try:
+    #         # Correct way to compile the entire model object, not just the forward function
+    #         model = torch.compile(model)
+    #         print("✅ Model compilation successful")
+    #     except Exception as e:
+    #         print(f"⚠️  Model compilation failed: {e}")
+    #         # Ensure model remains valid even if compilation fails
     
     # Initialize checkpoint manager
     checkpoint_manager = CheckpointManager(
