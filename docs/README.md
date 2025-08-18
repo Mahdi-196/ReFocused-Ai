@@ -59,12 +59,12 @@ tail -f logs/massive_processing.log
 - **41GB HuggingFace** → **12-21GB cleaned text** (70% retention)  
 - **Combined 54GB** → **25-35GB training data** (7M+ high-quality samples)
 
-### Processing Time
+### Processing Time (typical ranges)
 | System Specs | Processing Time | Output Quality |
 |--------------|----------------|----------------|
-| 8GB RAM, 4 cores | 26-48 hours | 65-80% retention |
-| 16GB RAM, 8 cores | 16-28 hours | 65-80% retention |
-| 32GB RAM, 12 cores | 8-16 hours | 65-80% retention |
+| 8GB RAM, 4 cores | 24–48 hours | 60–80% retention |
+| 16GB RAM, 8 cores | 14–30 hours | 60–80% retention |
+| 32GB RAM, 12 cores | 8–18 hours | 60–80% retention |
 
 ## 🧹 Cleaning Features
 

@@ -1,46 +1,34 @@
 # ReFocused-AI 1.2B Model Training Pipeline
 
-**Production-ready GPT-NeoX training system with 5-10x performance optimizations**
+Production-ready GPT‑NeoX training system with practical performance optimizations
 
 ## 🎯 Overview
 
-ReFocused-AI is a high-performance training pipeline for a **1.2B parameter GPT-NeoX model** featuring state-of-the-art optimizations that deliver **5-10x faster training** compared to baseline configurations. The system includes authenticated Google Cloud Storage integration, device-aware model compilation, advanced multi-GPU support, and comprehensive performance monitoring.
+ReFocused‑AI is a high‑performance training pipeline for a **1.2B parameter GPT‑NeoX model**. It includes authenticated Google Cloud Storage integration, device‑aware model compilation, multi‑GPU support, and comprehensive monitoring. Actual speedups depend on hardware, batch size, and dataset I/O.
 
 ### 🏆 Key Features
-- **1.2B parameter GPT-NeoX architecture** with production-grade performance
-- **Device-aware torch.compile** optimization after `accelerator.prepare()`
-- **Multi-GPU scaling** with near-linear efficiency (1-8 GPUs supported)
-- **Mixed precision training** (bf16/fp16) for 2x speed + 50% memory savings
-- **Background checkpoint uploads** with zero training interruption
-- **Smart checkpoint resume** from both local and GCS checkpoints with full state restoration
-- **Smart data pipeline** with skip-existing downloads and nested folder preservation
-- **51B token dataset** with Reddit conversational data
-- **Real-time monitoring** with comprehensive metrics and TensorBoard integration
+- **1.2B parameter GPT‑NeoX architecture**
+- **Device‑aware `torch.compile`** after `accelerator.prepare()`
+- **Multi‑GPU support (1–8 GPUs)**; scaling depends on hardware and configuration
+- **Mixed precision** (bf16/fp16) to improve throughput and reduce memory use
+- **Background checkpoint uploads** to GCS
+- **Resume training** from local or cloud checkpoints
+- **Data pipeline** with skip‑existing downloads and nested folder preservation
+- **Works with large tokenized datasets** you provide
+- **Real‑time monitoring** (logs, TensorBoard)
 
 ---
 
-## 📊 Dataset Analysis
+## 📊 Dataset & step math
 
-### Current Dataset Status
-```python
-# From actual bucket inspection and data analysis
-Files Found: 774 tokenized files in gs://refocused-ai
-Local Files: 601 tokenized files
-Estimated Tokens: ~51.2 billion tokens
-File Format: .npz with tokenized_cleaned_* prefix
-Content: Reddit conversational data (AcademicPsychology, AdviceForTeens, etc.)
-```
-
-### Training Mathematics
+### Token math per step (for reference)
 ```python
 # Per-step token consumption calculation
 effective_batch_size = per_device_batch * gradient_acc * num_gpus * sequence_length
 # Example: 4 × 4 × 2 × 1024 = 32,768 tokens/step
-
-# Dataset epochs calculation for different configurations
-# Production (2 GPU): 25,000 steps × 32,768 tokens = 819.2M tokens = 0.016 epochs
-# Production 8GPU: 590,625 steps × 262,144 tokens = 154.8B tokens = 3.036 epochs
 ```
+
+Your dataset size and coverage will vary based on the number and size of `.npz` files you train on.
 
 ---
 
@@ -52,7 +40,7 @@ cd 05_model_training
 ./setup.sh
 ```
 
-**What setup.sh does (382 lines of automation):**
+**What setup.sh does:**
 ```bash
 # From actual setup.sh script content
 ✅ Creates optimized virtual environment with Python 3.8+ validation
@@ -69,14 +57,15 @@ cd 05_model_training
 #### Single GPU (Development)
 ```bash
 ./start_training.sh --config production --gpus 1
-# Expected: 2.5-3.5 steps/second, ~18GB VRAM usage
+# Typical: ~1–3 steps/second at 1024 context with small batches (varies by GPU)
+# Memory: ~14–22GB VRAM depending on batch/precision
 ```
 
-#### Multi-GPU Production (2 GPUs) - Recommended
+#### Multi-GPU Production (2 GPUs) – Recommended
 ```bash
 ./start_training.sh --config production --gpus 2
-# Expected: 4.5-6.5 steps/second, 85-95% scaling efficiency
-# Time: ~14 hours for 25,000 steps, 20 checkpoints
+# Typical: ~2–5 steps/second combined at 1024 context (throughput scales with configuration)
+# Scaling: often 60–90% depending on I/O and batch sizes
 ```
 
 #### Resume from Checkpoint (Any Configuration)
@@ -86,11 +75,11 @@ cd 05_model_training
 # Automatically downloads from GCS if not local, restores full training state
 ```
 
-#### Maximum Performance (8 GPUs) - 3 Full Epochs
+#### Multi-GPU (up to 8 GPUs)
 ```bash
 ./start_training.sh --config production_8gpu --gpus 8
-# Expected: 20-35 steps/second, 3 complete epochs in 8.2 hours
-# Result: Commercial-grade AI model comparable to GPT-3.5
+# Throughput improves with more GPUs; total time depends on dataset size, I/O, and precision.
+# Use realistic batch sizes per GPU and monitor memory usage.
 ```
 
 ---
@@ -106,7 +95,7 @@ cd 05_model_training
 | **RAM** | 16GB | 32GB | 64GB+ |
 | **Storage** | 50GB SSD | 200GB NVMe | 500GB NVMe |
 
-### Software Requirements (Exact Versions)
+### Software Requirements (tested versions)
 ```python
 # From requirements.txt and setup.sh validation
 Python: 3.8+ (tested with 3.11.x)
@@ -131,7 +120,7 @@ wandb>=0.15.0                 # Advanced experiment tracking
 
 ## 🏗️ Architecture Details
 
-### Model Configuration (1.2B Parameters)
+### Model Configuration (1.2B parameters)
 ```python
 # From configs/model_config.py - Exact implementation
 GPTNeoXConfig(
@@ -332,42 +321,11 @@ def download_with_resume(blob, data_dir):
 
 ---
 
-## 📈 Performance Benchmarks
+## 📈 Performance notes
 
-### Training Speed Comparison
-| Configuration | Hardware | Steps/Sec | Effective Batch | Memory/GPU | Scaling Efficiency |
-|---------------|----------|-----------|-----------------|------------|-------------------|
-| **Baseline** | RTX 4090 | 0.4-0.8 | 4 | 22GB | N/A (baseline) |
-| **Optimized Single** | RTX 4090 | 2.5-3.5 | 16 | 18GB | **4-8x improvement** |
-| **2 GPU Production** | 2x RTX 4090 | 4.5-6.5 | 32 | 16GB each | **85-95% efficiency** |
-| **4 GPU High** | 4x A100 | 12-18 | 96 | 45GB each | **90-95% efficiency** |
-| **8 GPU Maximum** | 8x H100 | 20-35 | 256 | 60GB each | **Near-linear scaling** |
-
-### Optimization Impact Breakdown
-```python
-# Individual optimization contributions to overall performance
-torch_compile_optimization = {
-    "improvement": "20-40%",
-    "description": "Device-aware kernel compilation",
-    "hardware_dependency": "Modern GPUs (RTX 4090+, A100, H100)"
-}
-
-training_loop_optimization = {
-    "improvement": "5-15%", 
-    "description": "Reduced Python overhead, proper scheduler placement",
-    "hardware_dependency": "All configurations"
-}
-
-mixed_precision_optimization = {
-    "speed_improvement": "100%",
-    "memory_reduction": "50%",
-    "description": "bf16/fp16 hardware acceleration",
-    "hardware_dependency": "Tensor Core GPUs"
-}
-
-# Combined improvement: 5-10x vs baseline
-total_improvement = "5-10x faster than baseline configurations"
-```
+- Expect higher throughput with bf16/fp16 and `torch.compile` on modern GPUs.
+- Real‑world speed depends on: sequence length, effective batch size, GPU model/VRAM, disk/network I/O, and data loader settings.
+- As a rough guide at 1024 context and small batches: single high‑end consumer GPU often lands around ~1–3 steps/sec; 2 GPUs can reach ~2–5 steps/sec; larger servers can go higher.
 
 ---
 
@@ -390,7 +348,7 @@ export GOOGLE_CLOUD_PROJECT="black-dragon-461023-t5"
 
 # Verify bucket access and dataset availability
 gsutil ls gs://refocused-ai/
-# Expected: 774 tokenized files (~51.2B tokens)
+# Expected: list of tokenized files (count and size depend on your dataset)
 ```
 
 ### Step 3: Multi-GPU Configuration
@@ -411,16 +369,13 @@ accelerate config
 
 #### Production Training (Recommended)
 ```bash
-# 2 GPU production training (25K steps, ~14 hours)
+# 2 GPU production training (time varies with hardware and I/O)
 ./start_training.sh --config production --gpus 2
 
-# Expected performance:
-# - Speed: 4.5-6.5 steps/second
-# - Effective batch size: 32k tokens/step  
-# - GPU memory: ~16GB per GPU
-# - Total time: ~14 hours
-# - Checkpoints: 20 saves (every 5% of training)
-# - Dataset coverage: 0.016 epochs (1.6% of 51B tokens)
+# Tips:
+# - Start with smaller batches; increase if memory allows.
+# - Use bf16 where supported for better stability on modern GPUs.
+# - Adjust dataloader workers to match your CPU and storage.
 ```
 
 #### Resume Interrupted Training
@@ -436,16 +391,10 @@ accelerate config
 # ✅ Skips already processed batches in current epoch
 ```
 
-#### Maximum Quality Training
+#### Larger multi‑GPU runs
 ```bash
-# 8 GPU maximum performance (590K steps, 3 full epochs, ~8.2 hours)
+# 8 GPU training (throughput and time depend on dataset and hardware)
 ./start_training.sh --config production_8gpu --gpus 8
-
-# This produces a commercial-grade model with:
-# - Speed: 20-35 steps/second
-# - Complete dataset utilization: 3.036 epochs
-# - Total tokens processed: 154.8 billion
-# - Final model quality: Comparable to GPT-3.5
 ```
 
 ---
@@ -641,36 +590,18 @@ gsutil ls gs://refocused-ai/
 
 ---
 
-## 🎉 Expected Results
+## 🎉 What to expect
 
-### Training Completion Metrics
+- Loss values and convergence rates depend on your dataset size/quality and hyperparameters.
+- Training time ranges from hours to days based on GPU count, precision, and I/O.
+- Checkpoints include full training state for resume and analysis.
+
+### Inference (typical ranges)
 ```python
-# Production training results (25,000 steps, 2 GPU configuration)
-training_completion = {
-    "final_loss": 1.8-2.2,
-    "training_time": "~14 hours",
-    "total_checkpoints": 20,
-    "tokens_processed": "819.2M tokens",
-    "dataset_coverage": "0.016 epochs (1.6% of 51B tokens)",
-    "model_size": "~2.4GB per checkpoint"
-}
-
-# Model quality characteristics
-model_quality = {
-    "conversational_ability": "High-quality multi-turn conversations",
-    "context_understanding": "1024+ token context windows",
-    "response_coherence": "Consistent personality and knowledge",
-    "domain_expertise": "Reddit-style conversational patterns"
-}
-```
-
-### Production Deployment Specifications
-```python
-# Inference requirements and performance
 inference_specs = {
-    "memory_requirements": "~2.5GB VRAM for inference",
-    "inference_speed": "50-200 tokens/second (hardware dependent)",
-    "context_window": "2048 tokens maximum",
+    "memory_requirements": "several GB of VRAM or CPU RAM, depending on dtype",
+    "inference_speed": "~20–150 tokens/second on modern GPUs (highly hardware dependent)",
+    "context_window": "up to 2048 tokens (as configured)",
     "model_format": "PyTorch checkpoint, convertible to ONNX/TensorRT",
     "compatibility": "Hugging Face Transformers, vLLM, FastAPI"
 }
@@ -695,8 +626,7 @@ inference_specs = {
 - ✅ **Cloud Platforms**: AWS EC2, GCP Compute Engine, Azure VMs
 - ✅ **Hardware Range**: RTX 3080 (minimum) to H100 (maximum performance)
 
-### **Performance Guarantee:**
-With proper hardware configuration, ReFocused-AI delivers **5-10x performance improvements** over baseline transformer training implementations while maintaining full reproducibility and production-grade reliability.
+Performance varies by setup; measure on your hardware and adjust batch sizes, precision, and dataloader settings for best results.
 
 **Transform your AI training workflow with enterprise-grade performance and reliability!** 🚀
 

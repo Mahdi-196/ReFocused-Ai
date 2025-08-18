@@ -296,7 +296,7 @@ You'll know everything is working when you see:
 - ✅ Dependencies installed without errors
 - ✅ Authentication successful
 - ✅ Training data loaded (5+ files found)
-- ✅ Model initialized (~1.4B parameters)
+- ✅ Model initialized (~1.2B parameters)
 - ✅ Training steps progressing
 - ✅ Checkpoints uploading to GCS
 

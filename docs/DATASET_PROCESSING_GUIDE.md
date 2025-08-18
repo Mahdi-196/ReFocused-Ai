@@ -41,13 +41,13 @@ python process_massive_dataset.py
 tail -f logs/massive_processing.log
 ```
 
-## ⏱️ Time Estimates
+## ⏱️ Time Estimates (typical ranges)
 
 | System Configuration | Processing Time | Expected Output |
 |---------------------|----------------|-----------------|
-| **8GB RAM, 4 cores** | 26-48 hours | ~7M clean samples, 25-35GB |
-| **16GB RAM, 8 cores** | 16-28 hours | ~7M clean samples, 25-35GB |
-| **32GB RAM, 12+ cores** | 8-16 hours | ~7M clean samples, 25-35GB |
+| **8GB RAM, 4 cores** | 24–48 hours | 20–35GB cleaned |
+| **16GB RAM, 8 cores** | 14–30 hours | 20–35GB cleaned |
+| **32GB RAM, 12+ cores** | 8–18 hours | 20–35GB cleaned |
 
 ## 🔧 System Configuration
 

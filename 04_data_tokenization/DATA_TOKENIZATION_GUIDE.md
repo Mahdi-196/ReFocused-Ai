@@ -70,7 +70,7 @@ python tokenize_data.py --input data/cleaned --output data_tokenized --workers 4
 - Proven approach from successful tests
 - Robust error handling and recovery
 - Memory-optimized for large datasets
-- ~3,200 sequences/second processing rate
+- Processing rate depends on CPU and disk; typical range: ~2,000–3,200 seq/sec on modern machines
 
 **Usage:**
 ```bash
@@ -274,14 +274,14 @@ special_tokens = {
 
 ### Processing Speed Benchmarks
 
-Based on testing results:
+Actual speed depends on CPU cores, storage, and settings. Typical ranges:
 
-| Script | Processing Rate | Best For | Memory Usage |
-|--------|----------------|----------|--------------|
-| test_cloud_* | ~3,200 seq/sec | Testing | Low |
-| tokenize_data | ~2,800 seq/sec | Development | Medium |
-| run_full_* | ~3,000 seq/sec | Production | Low |
-| resume_* | ~3,000 seq/sec | Recovery | Low |
+| Script | Processing Rate (seq/sec) | Best For | Memory Usage |
+|--------|---------------------------|----------|--------------|
+| test_cloud_* | ~1,500–3,000 | Testing | Low |
+| tokenize_data | ~1,800–3,000 | Development | Medium |
+| run_full_* | ~2,000–3,200 | Production | Low |
+| resume_* | similar to production | Recovery | Low |
 
 ### Configuration Optimization
 

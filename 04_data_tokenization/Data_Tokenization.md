@@ -23,11 +23,11 @@ python run_full_tokenization.py
 
 | Script | Purpose | Best For | Speed | Memory |
 |--------|---------|----------|-------|--------|
-| `test_cloud_tokenization_10min.py` | Quick validation test | Testing setup | ~3,200 seq/sec | Low |
-| `tokenize_data.py` | Multi-threaded processing | Development | ~2,800 seq/sec | Medium |
-| `run_full_tokenization.py` | Production single-threaded | Large datasets | ~3,000 seq/sec | Low |
-| `resume_tokenization.py` | Resume interrupted jobs | Recovery | ~3,000 seq/sec | Low |
-| `fix_tokenization_single_threaded.py` | Debugging version | Troubleshooting | ~2,500 seq/sec | Low |
+| `test_cloud_tokenization_10min.py` | Quick validation test | Testing setup | ~1,500–3,000 seq/sec (hardware dependent) | Low |
+| `tokenize_data.py` | Multi-threaded processing | Development | ~1,800–3,000 seq/sec (hardware dependent) | Medium |
+| `run_full_tokenization.py` | Production single-threaded | Large datasets | ~2,000–3,200 seq/sec (hardware dependent) | Low |
+| `resume_tokenization.py` | Resume interrupted jobs | Recovery | similar to production | Low |
+| `fix_tokenization_single_threaded.py` | Debugging version | Troubleshooting | lower but stable | Low |
 
 ## 🎯 Choose the Right Script
 
@@ -45,7 +45,7 @@ python run_full_tokenization.py
 ## 📊 Expected Performance
 
 Based on testing results:
-- **Processing Rate**: 2,500-3,200 sequences/second
+- **Processing Rate**: typically 1,800–3,200 sequences/second depending on CPU, disk, and settings
 - **Memory Usage**: 1-4GB depending on script and configuration
 - **Output Format**: Compressed NumPy arrays (.npz files)
 

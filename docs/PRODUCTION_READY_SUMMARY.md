@@ -9,30 +9,27 @@
 
 ---
 
-## 📊 **DATA PROJECTIONS (Conservative Estimates)**
+## 📊 **DATA PROJECTIONS (Realistic ranges)**
 
-### **Reddit Ultra-Fast Collection**
-- **🎯 Target**: 504 subreddits
-- **📈 Posts**: 15.1M posts expected
-- **💬 Comments**: 1.1B+ comments (75 per post)
-- **💾 Raw Data**: 345GB+ potential
-- **⏱️ Time**: 8-18 hours
+### **Reddit Collection (rate‑limited)**
+- **🎯 Target**: Hundreds of subreddits (configurable)
+- **📈 Posts**: Volume depends on API limits and filters
+- **💬 Comments**: Comments per post vary widely
+- **💾 Raw Data**: Often 5–50GB per overnight run (varies)
+- **⏱️ Time**: 8–24 hours
 
-### **Multi-Source Ultra-Fast Collection** (RECOMMENDED)
-- **🎯 Total Raw Data**: 572GB+ potential
-- **📊 Reddit**: 345GB (60%)
-- **📚 WikiHow**: 115GB (20%) 
-- **🌐 OpenWebText**: 86GB (15%)
-- **🎓 Educational**: 29GB (5%)
+### **Multi-Source Collection** (recommended)
+- **🎯 Total Raw Data**: Tens to hundreds of GB depending on sources and duration
+- **📊 Reddit / Web / Educational**: Mix is configurable by you
 
-### **Realistic Overnight Expectations**
+### **Overnight expectations**
 Given Reddit API rate limits and practical considerations:
 
 | Scenario | Raw Data | Clean Data | Duration |
 |----------|----------|------------|----------|
-| **Conservative** | 10-15GB | 6-10GB | 8-12 hours |
-| **Optimistic** | 20-30GB | 12-20GB | 12-18 hours |
-| **Maximum** | 50GB+ | 30GB+ | 18-24 hours |
+| **Conservative** | 5–15GB | 3–10GB | 8–12 hours |
+| **Optimistic** | 15–30GB | 9–20GB | 12–18 hours |
+| **Maximum** | 30GB+ | 18GB+ | 18–24 hours |
 
 ---
 
