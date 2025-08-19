@@ -468,4 +468,4 @@ except Exception as e:
 print("\n✅ Inference script finished.")
 print("💡 To generate different text, run the script again and try different prompts.")
 print("💡 To adjust generation quality, experiment with temperature, top_k, and top_p parameters.")
-print("🚀 ReFocused-AI - Pushing the boundaries of language models!") 
+print("🚀 WOOOOOOOOOOO!") 
