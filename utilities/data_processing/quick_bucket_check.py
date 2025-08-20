@@ -5,16 +5,21 @@ Quick Bucket Check - Fast inspection of bucket contents
 
 import os
 from google.cloud import storage
+from google.oauth2 import service_account
 import warnings
 warnings.filterwarnings("ignore")
 
-def quick_bucket_check(bucket_name="refocused-ai"):
+def quick_bucket_check(bucket_name="refocused-ai", credentials_path: str | None = None, project_id: str | None = None):
     """Quick check of bucket contents"""
     print(f"🔍 QUICK BUCKET INSPECTION: gs://{bucket_name}")
     print("=" * 50)
     
     try:
-        client = storage.Client()
+        if credentials_path and os.path.exists(credentials_path):
+            creds = service_account.Credentials.from_service_account_file(credentials_path)
+            client = storage.Client(project=project_id, credentials=creds)
+        else:
+            client = storage.Client()
         bucket = client.bucket(bucket_name)
         
         print("📊 Scanning bucket contents...")
@@ -91,10 +96,10 @@ def quick_bucket_check(bucket_name="refocused-ai"):
     except Exception as e:
         print(f"❌ Error accessing bucket: {e}")
         print("\n💡 TROUBLESHOOTING:")
-        print("1. Make sure you're authenticated: gcloud auth application-default login")
+        print("1. Provide a credentials JSON path to this script if needed")
         print("2. Check bucket name is correct: refocused-ai")
-        print("3. Verify you have read access to the bucket")
+        print("3. Verify your service account has read access to the bucket")
         return False
 
 if __name__ == "__main__":
-    quick_bucket_check() 
+    quick_bucket_check()

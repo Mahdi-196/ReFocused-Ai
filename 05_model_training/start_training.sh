@@ -25,70 +25,17 @@ else
     echo "⚠️  No virtual environment found (venv directory missing)"
 fi
 
-# Set up authentication using an absolute path
-# Get the absolute path to the directory where this script is located
-SCRIPT_DIR_PATH=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
-CRED_FILE_NAME="black-dragon-461023-t5-93452a49f86b.json"
-# Construct the absolute path to the credentials file
-ABS_CRED_PATH="${SCRIPT_DIR_PATH}/credentials/${CRED_FILE_NAME}"
+ 
 
-echo "🔐 Setting up Google Cloud authentication..."
-export GOOGLE_APPLICATION_CREDENTIALS="${ABS_CRED_PATH}"
-export GOOGLE_CLOUD_PROJECT="black-dragon-461023-t5"
-
-# Verify credentials exist (this will now use the absolute path)
-if [[ ! -f "$GOOGLE_APPLICATION_CREDENTIALS" ]]; then
-    echo "❌ Credentials file not found: $GOOGLE_APPLICATION_CREDENTIALS"
-    echo "   (Checked absolute path based on script location)"
-    echo "   Please ensure your service account key is in the 'credentials' folder relative to the script"
-    exit 1
-fi
-
-echo "✅ Authentication configured"
-echo "   Project: $GOOGLE_CLOUD_PROJECT"
-echo "   Credentials (absolute path): $GOOGLE_APPLICATION_CREDENTIALS" # Now explicitly states absolute path
-
-# Test GCS permissions
-echo "🧪 Testing Google Cloud Storage permissions..."
-python -c "
-import os
-from google.cloud import storage
-try:
-    client = storage.Client()
-    bucket = client.bucket('refocused-ai')
-    # Test basic read access
-    list(bucket.list_blobs(max_results=1))
-    print('✅ GCS read access confirmed')
-    
-    # Test bucket metadata access (needed for uploads)
-    try:
-        bucket.exists()
-        print('✅ GCS bucket access confirmed')
-    except Exception as e:
-        print(f'⚠️  Limited GCS permissions detected: {e}')
-        print('   Training will proceed but uploads may fail')
-        print('   See fix_permissions.md for permission setup instructions')
-        
-except Exception as e:
-    print(f'❌ GCS authentication failed: {e}')
-    print('   Check your service account permissions')
-    print('   See fix_permissions.md for troubleshooting')
-    exit(1)
-"
-
-if [[ $? -ne 0 ]]; then
-    echo "❌ GCS authentication test failed"
-    echo "   Please check your credentials and permissions"
-    echo "   See fix_permissions.md for help"
-    exit 1
-fi
-
+# Parse command line arguments
 # Parse command line arguments
 CONFIG_TYPE="test"
 MAX_STEPS=""
 RESUME_CHECKPOINT=""
 NO_BACKGROUND=""
 GPU_COUNT=""
+GCS_CREDENTIALS_PATH=""
+GCP_PROJECT_ID=""
 
 while [[ $# -gt 0 ]]; do
     case $1 in
@@ -112,19 +59,27 @@ while [[ $# -gt 0 ]]; do
             GPU_COUNT="$2"
             shift 2
             ;;
+        --gcs-credentials)
+            GCS_CREDENTIALS_PATH="$2"
+            shift 2
+            ;;
+        --gcp-project)
+            GCP_PROJECT_ID="$2"
+            shift 2
+            ;;
         *)
             echo "Unknown option: $1"
-            echo "Usage: $0 [--config test|production] [--max-steps N] [--resume checkpoint_name] [--no-background-upload] [--gpus N]"
+            echo "Usage: $0 [--config test|production] [--max-steps N] [--resume checkpoint_name] [--no-background-upload] [--gpus N] [--gcs-credentials /abs/path/key.json] [--gcp-project PROJECT_ID]"
             echo ""
             echo "Examples:"
             echo "  # Single GPU training"
-            echo "  $0 --config test"
+            echo "  $0 --config test --gcs-credentials /abs/key.json --gcp-project my-project"
             echo ""
             echo "  # Multi-GPU training (2 GPUs)"
-            echo "  $0 --config test --gpus 2"
+            echo "  $0 --config test --gpus 2 --gcs-credentials /abs/key.json"
             echo ""
             echo "  # Production training (8 GPUs)"
-            echo "  $0 --config production --gpus 8"
+            echo "  $0 --config production --gpus 8 --gcs-credentials /abs/key.json --gcp-project my-project"
             exit 1
             ;;
     esac
@@ -136,6 +91,12 @@ echo "🎯 Training Configuration:"
 echo "   Config type: $CONFIG_TYPE"
 echo "   Background uploads: $([ -z "$NO_BACKGROUND" ] && echo "ENABLED" || echo "DISABLED")"
 echo "   Bucket: gs://refocused-ai/checkpoints"
+if [[ -n "$GCS_CREDENTIALS_PATH" ]]; then
+    echo "   Credentials: $GCS_CREDENTIALS_PATH"
+fi
+if [[ -n "$GCP_PROJECT_ID" ]]; then
+    echo "   GCP Project: $GCP_PROJECT_ID"
+fi
 
 if [[ -n "$GPU_COUNT" ]]; then
     echo "   GPU count: $GPU_COUNT"
@@ -184,6 +145,8 @@ ARGS=("--config" "$CONFIG_TYPE")
 [[ -n "$MAX_STEPS" ]] && ARGS+=("--max-steps" "$MAX_STEPS")
 [[ -n "$RESUME_CHECKPOINT" ]] && ARGS+=("--resume" "$RESUME_CHECKPOINT")
 [[ -n "$NO_BACKGROUND" ]] && ARGS+=("--no-background-upload")
+[[ -n "$GCS_CREDENTIALS_PATH" ]] && ARGS+=("--gcs-credentials" "$GCS_CREDENTIALS_PATH")
+[[ -n "$GCP_PROJECT_ID" ]] && ARGS+=("--gcp-project" "$GCP_PROJECT_ID")
 
 # Build the complete command
 if [[ -n "$GPU_COUNT" ]] && [[ "$GPU_COUNT" -gt 1 ]]; then

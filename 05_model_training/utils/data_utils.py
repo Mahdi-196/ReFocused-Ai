@@ -4,6 +4,7 @@ Data utilities for loading tokenized data from Google Cloud Storage
 
 import numpy as np
 from google.cloud import storage
+from google.oauth2 import service_account
 from typing import List, Optional, Iterator, Dict
 import os
 from tqdm import tqdm
@@ -19,15 +20,21 @@ import platform
 class GCSDataLoader:
     """Handles loading tokenized data from Google Cloud Storage with preprocessing cache"""
     
-    def __init__(self, bucket_name: str, cache_dir: str = "./cache", preprocess_cache_dir: str = "./preprocessed_cache"):
+    def __init__(self, bucket_name: str, cache_dir: str = "./cache", preprocess_cache_dir: str = "./preprocessed_cache", credentials_path: Optional[str] = None, project_id: Optional[str] = None):
         self.bucket_name = bucket_name
         self.cache_dir = cache_dir
         self.preprocess_cache_dir = preprocess_cache_dir
+        self.credentials_path = credentials_path
+        self.project_id = project_id
         os.makedirs(cache_dir, exist_ok=True)
         os.makedirs(preprocess_cache_dir, exist_ok=True)
         
         # Initialize GCS client
-        self.client = storage.Client()
+        if self.credentials_path and os.path.exists(self.credentials_path):
+            creds = service_account.Credentials.from_service_account_file(self.credentials_path)
+            self.client = storage.Client(project=self.project_id, credentials=creds)
+        else:
+            self.client = storage.Client()
         self.bucket = self.client.bucket(bucket_name)
         
         # Cache for flattened data to avoid repeated processing
@@ -334,8 +341,9 @@ def collate_fn(batch):
     }
 
 
-def create_dataloader(config, accelerator):
-    """Create training dataloader with optimized settings for maximum performance"""
+def create_dataloader(config, accelerator, credentials_path: Optional[str] = None, project_id: Optional[str] = None):
+    """Create training dataloader with optimized settings for maximum performance,
+    using explicit GCS credentials if provided (no environment variables)."""
     # Determine optimal number of workers based on platform and config
     if platform.system() == "Windows":
         # Use 0 workers on Windows to avoid multiprocessing/pickling issues
@@ -371,7 +379,9 @@ def create_dataloader(config, accelerator):
         bucket_name=config.bucket_name,
         file_pattern=config.tokenized_file_pattern,
         sequence_length=config.sequence_length,
-        max_files=config.max_files
+        max_files=config.max_files,
+        credentials_path=credentials_path,
+        project_id=project_id,
     )
     
     # Create optimized DataLoader
@@ -403,14 +413,22 @@ class SimpleTokenizedDataset(Dataset):
                  bucket_name: str,
                  file_pattern: str,
                  sequence_length: int = 1024,
-                 max_files: int = 5):
+                 max_files: int = 5,
+                 credentials_path: Optional[str] = None,
+                 project_id: Optional[str] = None):
         self.bucket_name = bucket_name
         self.file_pattern = file_pattern
         self.sequence_length = sequence_length
         self.max_files = max_files
+        self.credentials_path = credentials_path
+        self.project_id = project_id
         
         # Initialize GCS client
-        self.client = storage.Client()
+        if self.credentials_path and os.path.exists(self.credentials_path):
+            creds = service_account.Credentials.from_service_account_file(self.credentials_path)
+            self.client = storage.Client(project=self.project_id, credentials=creds)
+        else:
+            self.client = storage.Client()
         self.bucket = self.client.bucket(bucket_name)
         
         # Find and cache data files

@@ -189,20 +189,10 @@ mkdir -p credentials
 
 echo -e "✅ Directory structure created"
 
-echo -e "\n${YELLOW}Step 6: Authentication Setup${NC}"
-echo "=============================="
-
-CRED_FILE="./credentials/black-dragon-461023-t5-93452a49f86b.json"
-if [[ -f "$CRED_FILE" ]]; then
-    echo -e "✅ Credentials file found: $CRED_FILE"
-    export GOOGLE_APPLICATION_CREDENTIALS="$CRED_FILE"
-    export GOOGLE_CLOUD_PROJECT="black-dragon-461023-t5"
-    echo -e "✅ Environment variables set"
-else
-    echo -e "${YELLOW}⚠️  Credentials file not found: $CRED_FILE${NC}"
-    echo "   Please place your service account key in the credentials folder"
-    echo "   and name it: black-dragon-461023-t5-93452a49f86b.json"
-fi
+echo -e "\n${YELLOW}Step 6: Authentication Setup (Optional)${NC}"
+echo "========================================"
+echo "Provide your GCS credentials when running training:"
+echo "   ./start_training.sh --config test --gcs-credentials /abs/path/key.json --gcp-project your-project"
 
 echo -e "\n${YELLOW}Step 7: System Validation${NC}"
 echo "=========================="
@@ -282,10 +272,7 @@ echo -e "\n${YELLOW}Step 9: Data Download${NC}"
 echo "==================="
 
 # Check credentials before attempting download
-if [[ -z "$GOOGLE_APPLICATION_CREDENTIALS" ]]; then
-    echo -e "${YELLOW}⚠️  No Google credentials found - download may fail${NC}"
-    echo "   Set GOOGLE_APPLICATION_CREDENTIALS or skip download"
-fi
+echo -e "${BLUE}ℹ️  For data download, pass credentials to the script or configure locally as needed${NC}"
 
 read -p "Do you want to download training data now? (y/n): " -n 1 -r
 echo

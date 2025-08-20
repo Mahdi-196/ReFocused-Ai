@@ -19,6 +19,7 @@ import tempfile
 from pathlib import Path
 from transformers import AutoConfig, AutoTokenizer, AutoModelForCausalLM
 from google.cloud import storage
+from google.oauth2 import service_account
 
 # ============================================================================
 # CONFIGURATION SECTION
@@ -38,47 +39,12 @@ DEFAULT_PROMPT = "Hello, I am a language model,"
 # CREDENTIAL SETUP AND VALIDATION
 # ============================================================================
 
-def setup_gcs_credentials():
-    """Setup and validate Google Cloud Storage credentials"""
-    
-    # Check if environment variable is already set
-    if os.environ.get('GOOGLE_APPLICATION_CREDENTIALS'):
-        cred_path = os.environ['GOOGLE_APPLICATION_CREDENTIALS']
-        if os.path.exists(cred_path):
-            print(f"✅ Using credentials from environment: {cred_path}")
-            return True
-        else:
-            print(f"⚠️  Environment variable set but file not found: {cred_path}")
-    
-    # Look for credentials in common project locations
-    possible_cred_paths = [
-        # Relative to project root
-        "../credentials/black-dragon-461023-t5-93452a49f86b.json",
-        "../../credentials/black-dragon-461023-t5-93452a49f86b.json", 
-        # Relative to current directory
-        "./credentials/black-dragon-461023-t5-93452a49f86b.json",
-        # Absolute paths (common locations)
-        os.path.expanduser("~/ReFocused-Ai/05_model_training/credentials/black-dragon-461023-t5-93452a49f86b.json"),
-        os.path.expanduser("~/credentials/black-dragon-461023-t5-93452a49f86b.json"),
-    ]
-    
-    for cred_path in possible_cred_paths:
-        if os.path.exists(cred_path):
-            abs_path = os.path.abspath(cred_path)
-            os.environ['GOOGLE_APPLICATION_CREDENTIALS'] = abs_path
-            print(f"✅ Found and set credentials: {abs_path}")
-            return True
-    
-    print("⚠️  Google Cloud credentials not found. Checked locations:")
-    for path in possible_cred_paths:
-        print(f"   • {path}")
-    print("\n💡 To fix this:")
-    print("   1. Set environment variable:")
-    print("      export GOOGLE_APPLICATION_CREDENTIALS='/home/ubuntu/ReFocused-Ai/05_model_training/credentials/black-dragon-461023-t5-93452a49f86b.json'")
-    print("   2. Or place the credentials file in one of the above locations")
-    print("   3. Restart the script after setting credentials")
-    
-    return False
+def get_storage_client(credentials_path: str | None = None, project_id: str | None = None):
+    """Construct a GCS client; do not rely on env vars."""
+    if credentials_path and os.path.exists(credentials_path):
+        creds = service_account.Credentials.from_service_account_file(credentials_path)
+        return storage.Client(project=project_id, credentials=creds)
+    return storage.Client()
 
 # ============================================================================
 # SCRIPT INITIALIZATION
@@ -93,12 +59,12 @@ if torch.cuda.is_available():
     print(f"🎮 CUDA Device: {torch.cuda.get_device_name()}")
 
 # Early credential check to provide helpful feedback
-print("\n🔐 Checking Google Cloud Storage credentials...")
-credentials_available = setup_gcs_credentials()
-if credentials_available:
-    print("✅ GCS access enabled - bucket downloads available")
-else:
-    print("⚠️  GCS access disabled - only local checkpoints and manual paths available")
+print("\n🔐 Optional: Provide path to GCS credentials (press Enter to skip)")
+gcs_key_path = input("Credentials JSON path (or blank): ").strip()
+gcp_project_id = None
+if gcs_key_path:
+    gcp_project_id = input("GCP Project ID (optional): ").strip() or None
+print("✅ Proceeding with", "provided credentials" if gcs_key_path else "default GCS auth (may be disabled)")
 
 print("=" * 70)
 
@@ -163,12 +129,7 @@ def list_bucket_checkpoints():
     """List available checkpoints in the GCS bucket"""
     try:
         print("☁️  Connecting to Google Cloud Storage...")
-        
-        # Check if credentials are available (silent check)
-        if not os.environ.get('GOOGLE_APPLICATION_CREDENTIALS'):
-            return []
-        
-        client = storage.Client()
+        client = get_storage_client(gcs_key_path, gcp_project_id)
         bucket = client.bucket(BUCKET_NAME)
         
         print(f"📡 Scanning gs://{BUCKET_NAME}/{BUCKET_CHECKPOINT_PATH}/")
@@ -200,9 +161,8 @@ def download_checkpoint_from_bucket(checkpoint_name, download_dir="./downloaded_
     print(f"📥 Preparing checkpoint '{checkpoint_name}' from bucket...")
 
     # Check if credentials are available
-    if not os.environ.get('GOOGLE_APPLICATION_CREDENTIALS'):
-        print("❌ Cannot download without valid GCS credentials.")
-        return None
+    # Build client using provided credentials if any
+    client = get_storage_client(gcs_key_path, gcp_project_id)
 
     os.makedirs(download_dir, exist_ok=True)
     training_path = os.path.join(download_dir, checkpoint_name)
@@ -210,7 +170,6 @@ def download_checkpoint_from_bucket(checkpoint_name, download_dir="./downloaded_
     # Only download if the training checkpoint doesn't already exist
     if not os.path.exists(training_path):
         try:
-            client = storage.Client()
             bucket = client.bucket(BUCKET_NAME)
             tar_blob_name = f"{BUCKET_CHECKPOINT_PATH}/{checkpoint_name}.tar.gz"
             tar_blob = bucket.blob(tar_blob_name)

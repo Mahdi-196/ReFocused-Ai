@@ -12,20 +12,25 @@ import os
 import sys
 import numpy as np
 from google.cloud import storage
+from google.oauth2 import service_account
 from tqdm import tqdm
 import json
 import time
 import warnings
 warnings.filterwarnings("ignore")
 
-def analyze_bucket_data(bucket_name="refocused-ai", max_sample_files=30):
+def analyze_bucket_data(bucket_name="refocused-ai", max_sample_files=30, credentials_path: str | None = None, project_id: str | None = None):
     """Analyze bucket data and return statistics"""
     print(f"🚀 REFOCUSED-AI TRAINING PARAMETER ANALYZER")
     print("=" * 60)
     print(f"🔍 Analyzing bucket: gs://{bucket_name}")
     
     try:
-        client = storage.Client()
+        if credentials_path and os.path.exists(credentials_path):
+            creds = service_account.Credentials.from_service_account_file(credentials_path)
+            client = storage.Client(project=project_id, credentials=creds)
+        else:
+            client = storage.Client()
         bucket = client.bucket(bucket_name)
         
         print("📊 Scanning for tokenized files...")
@@ -253,7 +258,19 @@ def main():
     
     try:
         # Analyze bucket data
-        stats = analyze_bucket_data()
+        # Accept optional CLI args for credentials
+        cred_path = None
+        project_id = None
+        if len(sys.argv) > 1:
+            # naive parse: --gcs-credentials <path> --gcp-project <id>
+            args = sys.argv[1:]
+            for i in range(len(args)):
+                if args[i] == "--gcs-credentials" and i + 1 < len(args):
+                    cred_path = args[i+1]
+                if args[i] == "--gcp-project" and i + 1 < len(args):
+                    project_id = args[i+1]
+
+        stats = analyze_bucket_data(credentials_path=cred_path, project_id=project_id)
         
         if stats is None:
             print("❌ Failed to analyze bucket data")

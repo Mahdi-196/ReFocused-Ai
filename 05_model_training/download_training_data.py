@@ -2,12 +2,16 @@ import os
 from pathlib import Path
 import time
 from google.cloud import storage
+from google.oauth2 import service_account
 import json
 import numpy as np  # for integrity check
 
-# Set environment variables for Google Cloud authentication
-os.environ['GOOGLE_APPLICATION_CREDENTIALS'] = './credentials/black-dragon-461023-t5-93452a49f86b.json'
-os.environ['GOOGLE_CLOUD_PROJECT'] = 'black-dragon-461023-t5'
+def get_storage_client(credentials_path: str | None = None, project_id: str | None = None) -> storage.Client:
+    """Construct a GCS client without relying on environment variables."""
+    if credentials_path and os.path.exists(credentials_path):
+        creds = service_account.Credentials.from_service_account_file(credentials_path)
+        return storage.Client(project=project_id, credentials=creds)
+    return storage.Client()
 
 def is_npz_intact(local_path: Path) -> bool:
     """
@@ -22,7 +26,7 @@ def is_npz_intact(local_path: Path) -> bool:
     except Exception:
         return False
 
-def download_refocused_data():
+def download_refocused_data(credentials_path: str | None = None, project_id: str | None = None):
     """Download all tokenized training data from refocused-ai bucket,
        re-downloading only if the local copy is missing or invalid."""
     
@@ -36,7 +40,7 @@ def download_refocused_data():
     
     try:
         print("🔐 Authenticating with Google Cloud Storage...")
-        client = storage.Client()
+        client = get_storage_client(credentials_path, project_id)
         bucket = client.bucket(bucket_name)
         
         print("📋 Fetching file list...")
@@ -115,7 +119,7 @@ def download_refocused_data():
             
     except Exception as e:
         print(f"❌ Error downloading data: {e}")
-        print("Make sure GOOGLE_APPLICATION_CREDENTIALS is set correctly")
+        print("Check your provided GCS credentials path and project ID.")
         return False
 
 def create_data_info():

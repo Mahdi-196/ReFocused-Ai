@@ -1,6 +1,4 @@
-# 🚀 ReFocused-AI: 1.2B Parameter Language Model
-
-Complete training system for the ReFocused-AI language model with Google Cloud Storage integration and authenticated checkpoint uploading.
+# 🚀 ReFocused-AI: 1.2B Parameter Language Model Pipeline
 
 ## 🌱 Why this project exists
 
@@ -23,7 +21,8 @@ my favorite things about this pipeline is it really is user friendly it give ste
 3. `03_tokenizer_training/`: Train a ByteLevel BPE tokenizer (GPT‑2 style) on your cleaned text.
 4. `04_data_tokenization/`: Convert text into fixed‑length token sequences (`.npz` with input_ids/masks).
 5. `05_model_training/`: Train the 1.2B GPT‑NeoX model; mixed precision, resume, and GCS checkpoints.
-6. `07_utilities/`: Analysis scripts (dataset stats, tokenized data checks, quick counts).
+6. `06_fine_tuning/`: Fine‑tune the base model for chat/code/instruct (full or LoRA).
+7. `utilities/`: Analysis scripts (dataset stats, tokenized data checks, quick counts).
 
 ## 📋 Quick Start
 
@@ -56,12 +55,13 @@ ReFocused-Ai/
 ├── 05_model_training/          # 🎯 Training system (GPT‑NeoX 1.2B)
 │   ├── train.py                # Main training script
 │   ├── start_training.sh       # One‑click launcher
-│   ├── TRAINING_README.md      # Detailed training docs
+│   ├── README.md               # Detailed training docs
 │   ├── configs/                # Model/training configs
 │   ├── utils/                  # Dataloaders, checkpoints, metrics
 │   ├── credentials/            # GCS keys (user‑provided)
 │   └── checkpoints/            # Local checkpoint storage
-├── 07_utilities/               # Analysis scripts
+├── 06_fine_tuning/             # Fine‑tuning (LoRA/full; chat/code/instruct)
+├── utilities/                  # Analysis scripts
 ├── SETUP_GUIDE.md              # 📖 Complete setup guide
 ├── requirements.txt            # Python dependencies
 └── README.md                   # This file
@@ -74,6 +74,7 @@ ReFocused-Ai/
 - **Tokenizer**: Train BPE (GPT‑2 style) and save Transformers‑compatible artifacts
 - **Tokenization**: Shard to `.npz` with input_ids/attention_mask ready for PyTorch
 - **Training**: Mixed precision, device‑aware `torch.compile`, resume, metrics
+- **Fine‑tuning**: Full or LoRA methods for chat, code, and instruction tasks
 - **Checkpoints**: Background uploads to GCS with metadata; reliable resume
 - **Monitoring**: CLI logs, TensorBoard support; progress and performance hints
 - **Configs**: Test and production presets; easy overrides for steps/batch size
@@ -94,11 +95,11 @@ python 03_tokenizer_training/train_tokenizer.py
 # 4) Tokenize to .npz shards
 python 04_data_tokenization/run_full_tokenization.py
 
-# 5) Train the model
-./start_training.sh --config test
+# 5) Train the model (no env vars; pass credentials explicitly if needed)
+./start_training.sh --config test --gcs-credentials /absolute/path/to/key.json --gcp-project your-project-id
 
 # Production training
-./start_training.sh --config production
+./start_training.sh --config production --gcs-credentials /absolute/path/to/key.json --gcp-project your-project-id
 
 # Custom steps
 ./start_training.sh --config test --max-steps 2000
@@ -108,6 +109,13 @@ python 04_data_tokenization/run_full_tokenization.py
 
 # Monitor progress
 tail -f logs/training.log
+
+# 6) Fine‑tune (optional)
+python 06_fine_tuning/fine_tune.py \
+  --task chat \
+  --base-model 05_model_training/checkpoints/final_model \
+  --dataset ./datasets/chat_data.jsonl \
+  --output-dir ./fine_tuned_models
 ```
 
 ## 📊 Training Configurations
@@ -136,7 +144,8 @@ tail -f logs/training.log
 ## 📖 Documentation
 
 - **[SETUP_GUIDE.md](SETUP_GUIDE.md)**: Complete setup instructions with virtual environment
-- **[05_model_training/TRAINING_README.md](05_model_training/TRAINING_README.md)**: Detailed training documentation
+- **[05_model_training/README.md](05_model_training/README.md)**: Detailed training documentation
+- **[06_fine_tuning/README.md](06_fine_tuning/README.md)**: Fine‑tuning methods and tasks
 - **[configs/](05_model_training/configs/)**: Training and model configuration files
 
 ## 🎯 Model Details

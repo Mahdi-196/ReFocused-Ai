@@ -63,7 +63,7 @@ cd 05_model_training
 
 #### Multi-GPU Production (2 GPUs) – Recommended
 ```bash
-./start_training.sh --config production --gpus 2
+./start_training.sh --config production --gpus 2 --gcs-credentials /abs/path/key.json --gcp-project your-project-id
 # Typical: ~2–5 steps/second combined at 1024 context (throughput scales with configuration)
 # Scaling: often 60–90% depending on I/O and batch sizes
 ```
@@ -71,13 +71,13 @@ cd 05_model_training
 #### Resume from Checkpoint (Any Configuration)
 ```bash
 # Resume training from specific checkpoint (works with local or GCS)
-./start_training.sh --config production --gpus 2 --resume checkpoint-epoch0-step10000-files2
+./start_training.sh --config production --gpus 2 --resume checkpoint-epoch0-step10000-files2 --gcs-credentials /abs/path/key.json
 # Automatically downloads from GCS if not local, restores full training state
 ```
 
 #### Multi-GPU (up to 8 GPUs)
 ```bash
-./start_training.sh --config production_8gpu --gpus 8
+./start_training.sh --config production_8gpu --gpus 8 --gcs-credentials /abs/path/key.json --gcp-project your-project-id
 # Throughput improves with more GPUs; total time depends on dataset size, I/O, and precision.
 # Use realistic batch sizes per GPU and monitor memory usage.
 ```
@@ -342,13 +342,8 @@ cd ReFocused-AI/05_model_training
 
 ### Step 2: Authentication and Bucket Access
 ```bash
-# From start_training.sh - Authentication setup
-export GOOGLE_APPLICATION_CREDENTIALS="./credentials/black-dragon-461023-t5-93452a49f86b.json"
-export GOOGLE_CLOUD_PROJECT="black-dragon-461023-t5"
-
-# Verify bucket access and dataset availability
-gsutil ls gs://refocused-ai/
-# Expected: list of tokenized files (count and size depend on your dataset)
+# Provide credentials via flags when running training commands (no env vars required)
+./start_training.sh --config test --gcs-credentials /abs/path/key.json --gcp-project your-project-id
 ```
 
 ### Step 3: Multi-GPU Configuration
@@ -381,7 +376,7 @@ accelerate config
 #### Resume Interrupted Training
 ```bash
 # Resume from any checkpoint (automatically downloads from GCS if needed)
-./start_training.sh --config production --gpus 2 --resume checkpoint-epoch0-step12500-files2
+./start_training.sh --config production --gpus 2 --resume checkpoint-epoch0-step12500-files2 --gcs-credentials /abs/path/key.json
 
 # What happens on resume:
 # ✅ Downloads checkpoint from GCS if not local
@@ -579,14 +574,7 @@ Check these messages in the output:
 If missing, check GCS authentication and checkpoint integrity.
 
 #### **Issue: "GCS authentication failed"**
-```bash
-# Set up credentials
-export GOOGLE_APPLICATION_CREDENTIALS="./credentials/black-dragon-461023-t5-93452a49f86b.json"
-export GOOGLE_CLOUD_PROJECT="black-dragon-461023-t5"
-
-# Test access
-gsutil ls gs://refocused-ai/
-```
+Run with explicit credentials flags, e.g. `--gcs-credentials /abs/path/key.json --gcp-project your-project-id`.
 
 ---
 

@@ -97,11 +97,9 @@ Your credentials file should look like this:
 # Make sure you're in 05_model_training directory
 cd 05_model_training
 
-# Test authentication and GCS access
-source setup_auth.sh
-
-# Test with a very short training run (5 steps)
-./start_training.sh --config test --max-steps 5
+# Run a very short training test (5 steps)
+# Pass credentials explicitly (no env vars)
+./start_training.sh --config test --max-steps 5 --gcs-credentials /absolute/path/to/key.json --gcp-project your-project-id
 ```
 
 ## 🚀 Step 6: Start Training
@@ -132,14 +130,15 @@ cd 05_model_training
 
 ### Manual Setup (Alternative)
 ```bash
-# Set up authentication manually
-source setup_auth.sh
-
-# Run training directly
-python train.py --config test
+# Run training directly (pass credentials explicitly)
+python train.py --config test \
+  --gcs-credentials /absolute/path/to/key.json \
+  --gcp-project your-project-id
 
 # Or with custom options
-python train.py --config production --max-steps 5000
+python train.py --config production --max-steps 5000 \
+  --gcs-credentials /absolute/path/to/key.json \
+  --gcp-project your-project-id
 ```
 
 ## 📊 Step 7: Monitor Training
@@ -224,10 +223,9 @@ which python
 # Check credentials file exists
 ls -la 05_model_training/credentials/
 
-# Test authentication
+# start_training.sh will validate access via provided credentials path
 cd 05_model_training
-source setup_auth.sh
-gcloud auth application-default print-access-token
+python -c "from google.cloud import storage; print('OK') if storage.Client().bucket('refocused-ai') else print('FAIL')"
 ```
 
 ### Memory Issues
@@ -249,8 +247,47 @@ python download_training_data.py
 ```bash
 # Make scripts executable
 chmod +x 05_model_training/start_training.sh
-chmod +x 05_model_training/setup_auth.sh
 ```
+
+## 🧩 Step 8: Fine‑tune (optional)
+
+After base training, adapt the model to specific tasks using the fine‑tuning module.
+
+```bash
+# Chat fine‑tuning (full FT)
+python 06_fine_tuning/fine_tune.py \
+  --task chat \
+  --base-model 05_model_training/checkpoints/final_model \
+  --dataset ./datasets/chat_data.jsonl \
+  --output-dir ./fine_tuned_models
+
+# Instruction fine‑tuning with LoRA (parameter‑efficient)
+python 06_fine_tuning/fine_tune.py \
+  --task instruct \
+  --base-model 05_model_training/checkpoints/final_model \
+  --dataset ./datasets/instruct.jsonl \
+  --lora --lora-rank 8 \
+  --output-dir ./fine_tuned_models
+
+# Useful flags: --freeze-ratio 0.7, --gradient-checkpointing, --mixed-precision bf16, --resume <checkpoint>
+```
+
+## 🧰 Utilities by Stage
+
+- Data collection/processing:
+  - utilities/data_processing/quick_dataset_size_check.py: Estimate dataset size and tokens.
+  - utilities/data_processing/analyze_tokenized_data.py: Validate tokenized shards.
+  - utilities/data_processing/check_missing_files.py: Detect missing/corrupt files.
+  - utilities/data_processing/count_final_sequences.py: Count sequences across shards.
+  - utilities/data_processing/quick_bucket_check.py: Sanity‑check GCS bucket contents.
+
+- Training planning and monitoring:
+  - utilities/analysis/analyze_training_parameters.py: Suggest steps, batch sizes, scaling.
+  - utilities/analysis/8gpu_analysis.py: Recommendations for 8‑GPU runs.
+  - utilities/training/resume_after_disk_full.py: Cleanup and resume after disk full.
+
+- Deployment/cleanup:
+  - utilities/deployment/cleanup_summary.py: Summarize and clean old checkpoints/models.
 
 ## 📈 Expected Performance
 

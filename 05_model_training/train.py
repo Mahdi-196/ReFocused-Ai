@@ -80,6 +80,10 @@ def main():
                        help="Disable background uploads (training will block on uploads)")
     parser.add_argument("--mixed-precision", type=str, choices=["no", "fp16", "bf16"], 
                        default=None, help="Override mixed precision setting")
+    parser.add_argument("--gcs-credentials", type=str, default=None,
+                       help="Path to GCS service account JSON (no env vars required)")
+    parser.add_argument("--gcp-project", type=str, default=None,
+                       help="Optional GCP project ID")
     args = parser.parse_args()
     
     # Set up signal handlers for graceful shutdown
@@ -150,7 +154,12 @@ def main():
     )
     
     # Create optimized dataloader
-    train_dataloader, num_files = create_dataloader(config, accelerator)
+    train_dataloader, num_files = create_dataloader(
+        config,
+        accelerator,
+        credentials_path=args.gcs_credentials,
+        project_id=args.gcp_project,
+    )
     print(f"  Training files: {num_files}")
     print(f"  Steps per epoch: {len(train_dataloader)}")
     
@@ -180,10 +189,12 @@ def main():
     
     # Initialize checkpoint manager
     checkpoint_manager = CheckpointManager(
-        config.bucket_name, 
-        config.checkpoint_bucket_path, 
+        config.bucket_name,
+        config.checkpoint_bucket_path,
         config.output_dir,
-        background_upload=not args.no_background_upload
+        background_upload=not args.no_background_upload,
+        credentials_path=args.gcs_credentials,
+        project_id=args.gcp_project,
     )
     
     # Initialize training state variables

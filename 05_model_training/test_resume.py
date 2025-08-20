@@ -37,10 +37,12 @@ def test_resume_logic():
     
     # Test checkpoint manager initialization
     checkpoint_manager = CheckpointManager(
-        config.bucket_name, 
+        config.bucket_name,
         getattr(config, 'checkpoint_bucket_path', 'checkpoints'),
         config.output_dir,
-        background_upload=False
+        background_upload=False,
+        credentials_path=None,
+        project_id=None,
     )
     print(f"✅ Initialized CheckpointManager")
     

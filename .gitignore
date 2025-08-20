@@ -166,3 +166,7 @@ data/*/*.parquet
 *.json
 *-key.json
 *credentials*.json 
+
+# Allow tracking tokenizer artifacts
+!tokenizer/tokenizer.json
+!tokenizer/vocab.json

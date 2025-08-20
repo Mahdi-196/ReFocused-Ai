@@ -1,18 +1,17 @@
 import os
 from google.cloud import storage
+from google.oauth2 import service_account
 import tempfile
 import json
-
-# Set environment variables
-os.environ['GOOGLE_APPLICATION_CREDENTIALS'] = '../credentials/black-dragon-461023-t5-93452a49f86b.json'
-os.environ['GOOGLE_CLOUD_PROJECT'] = 'black-dragon-461023-t5'
 
 print('🔐 Testing Google Cloud Storage Authentication...')
 print('=' * 50)
 
 try:
     # Initialize client
-    client = storage.Client()
+    cred_path = os.path.abspath('../credentials/black-dragon-461023-t5-93452a49f86b.json')
+    creds = service_account.Credentials.from_service_account_file(cred_path)
+    client = storage.Client(project='black-dragon-461023-t5', credentials=creds)
     bucket = client.bucket('refocused-ai')
     
     print('✅ Client initialized successfully')

@@ -8,6 +8,7 @@ import subprocess
 import threading
 import tempfile
 from google.cloud import storage
+from google.oauth2 import service_account
 from typing import Optional, Dict, Any
 import json
 from datetime import datetime
@@ -21,18 +22,26 @@ class CheckpointManager:
                  bucket_name: str = "refocused-ai",
                  checkpoint_path: str = "Checkpoints",
                  local_dir: str = "./checkpoints",
-                 background_upload: bool = True):
+                 background_upload: bool = True,
+                 credentials_path: Optional[str] = None,
+                 project_id: Optional[str] = None):
         self.bucket_name = bucket_name
         self.checkpoint_path = checkpoint_path
         self.local_dir = local_dir
         self.background_upload = background_upload
+        self.credentials_path = credentials_path
+        self.project_id = project_id
         os.makedirs(local_dir, exist_ok=True)
         
         # Track background upload processes
         self.upload_processes = []
         
         try:
-            self.client = storage.Client()
+            if self.credentials_path and os.path.exists(self.credentials_path):
+                creds = service_account.Credentials.from_service_account_file(self.credentials_path)
+                self.client = storage.Client(project=self.project_id, credentials=creds)
+            else:
+                self.client = storage.Client()
             self.bucket = self.client.bucket(bucket_name)
             print(f"Initialized authenticated GCS client for bucket: {bucket_name}")
         except Exception as e:
@@ -46,7 +55,11 @@ class CheckpointManager:
         if self.client is None or self.bucket is None:
             try:
                 print("🔄 Attempting to (re)initialize GCS client...")
-                self.client = storage.Client()
+                if self.credentials_path and os.path.exists(self.credentials_path):
+                    creds = service_account.Credentials.from_service_account_file(self.credentials_path)
+                    self.client = storage.Client(project=self.project_id, credentials=creds)
+                else:
+                    self.client = storage.Client()
                 self.bucket = self.client.bucket(self.bucket_name)
                 print(f"✅ GCS client (re)initialized for bucket: {self.bucket_name}")
             except Exception as e:
@@ -186,7 +199,7 @@ class CheckpointManager:
         
         upload_thread = threading.Thread(
             target=self._background_upload_tar_worker,
-            args=(local_dir, checkpoint_name),  # Pass directory instead of tar_path
+            args=(local_dir, checkpoint_name),
             daemon=True
         )
         upload_thread.start()
@@ -195,10 +208,9 @@ class CheckpointManager:
         print(f"✅ Checkpoint {checkpoint_name} queued for background tar creation and upload")
     
     def _background_upload_tar_worker(self, local_dir: str, checkpoint_name: str):
-        """Background worker to create tarball, upload it using gsutil, then clean up source directory."""
-        temp_boto_file = None  # Initialize
+        """Background worker to create tarball, upload it using Python GCS client, then clean up source directory."""
         tar_path = f"{local_dir}.tar.gz"
-        upload_successful_flag = False  # Keep track of upload success
+        upload_successful_flag = False
         
         try:
             # First, create the tar archive in the background thread
@@ -220,57 +232,25 @@ class CheckpointManager:
                 return  # Exit if tar creation failed
             print(f"✅ [BACKGROUND] Tar archive created for {checkpoint_name}")
 
-            # Now proceed with gsutil upload
-            gsutil_executable_path = shutil.which("gsutil")
-            if gsutil_executable_path is None:
-                print(f"⚠️ [BACKGROUND] gsutil not found. Cannot perform upload for {checkpoint_name}.")
-                if os.path.exists(tar_path):
-                    os.remove(tar_path)
-                    print(f"🗑️ [BACKGROUND] Cleaned up unused tarball {tar_path} as gsutil is not found.")
-                return  # Exit if gsutil not found
-
-            bucket_uri = f"gs://{self.bucket_name}/{self.checkpoint_path}/{checkpoint_name}.tar.gz"
-            print(f"☁️ [BACKGROUND] Uploading {tar_path} to {bucket_uri} using gsutil...")
-
-            current_env = os.environ.copy()
-            gac_path = current_env.get('GOOGLE_APPLICATION_CREDENTIALS')
-            gcp_project = current_env.get('GOOGLE_CLOUD_PROJECT')
-
-            if gac_path is None:
-                print(f"❌ [BACKGROUND] GOOGLE_APPLICATION_CREDENTIALS not found for gsutil for {checkpoint_name}!")
-                # tar_path might still exist, consider if it should be cleaned up or kept for manual upload
+            # Upload using Python client with explicit credentials
+            self._ensure_client()
+            if self.client is None or self.bucket is None:
+                print(f"❌ [BACKGROUND] GCS client unavailable. Cannot upload {checkpoint_name}.")
                 return
 
-            # --- START: Create and use temporary Boto config ---
-            boto_config_content = f"[Credentials]\ngs_service_key_file = {gac_path}\n\n"
-            if gcp_project:  # Only add project_id if it's set
-                boto_config_content += f"[GSUtil]\ndefault_project_id = {gcp_project}\n"
-            
-            # Create a named temporary file to store the Boto config
-            with tempfile.NamedTemporaryFile(mode="w", delete=False) as tf:
-                tf.write(boto_config_content)
-                temp_boto_file = tf.name
-            
-            current_env['BOTO_CONFIG'] = temp_boto_file
-            print(f"🔧 [BACKGROUND] Using temporary Boto config for gsutil: {temp_boto_file}")
-            # --- END: Create and use temporary Boto config ---
-
-            upload_result = subprocess.run(
-                [gsutil_executable_path, "-m", "cp", tar_path, bucket_uri],
-                capture_output=True, text=True, env=current_env
-            )
-
-            if upload_result.returncode == 0:
+            blob_path = f"{self.checkpoint_path}/{checkpoint_name}.tar.gz"
+            print(f"☁️ [BACKGROUND] Uploading {tar_path} to gs://{self.bucket_name}/{blob_path}...")
+            try:
+                blob = self.bucket.blob(blob_path)
+                blob.upload_from_filename(tar_path)
                 print(f"✅ [BACKGROUND] Successfully uploaded {checkpoint_name}.tar.gz")
-                upload_successful_flag = True  # Mark upload as successful
-                # Clean up the local tar file ONLY after successful upload
+                upload_successful_flag = True
                 if os.path.exists(tar_path):
                     os.remove(tar_path)
                     print(f"🗑️ [BACKGROUND] Cleaned up uploaded tarball {tar_path}")
-            else:
-                print(f"❌ [BACKGROUND] Failed to upload {checkpoint_name}.tar.gz using gsutil. Stderr: {upload_result.stderr}")
-                # If upload failed, we might want to keep the tarball for manual upload/debug
-                print(f"ℹ️ [BACKGROUND] Keeping local tarball (if created): {tar_path} due to upload failure.")
+            except Exception as e:
+                print(f"❌ [BACKGROUND] Upload failed for {checkpoint_name}: {e}")
+                print(f"ℹ️ [BACKGROUND] Keeping local tarball for manual upload: {tar_path}")
 
         except Exception as e:
             print(f"❌ [BACKGROUND] Exception during tar creation/upload for {checkpoint_name}: {e}")
@@ -279,11 +259,6 @@ class CheckpointManager:
             if os.path.exists(tar_path):
                 print(f"ℹ️ [BACKGROUND] Tarball {tar_path} may still exist locally after exception.")
         finally:
-            # Clean up temporary Boto config
-            if temp_boto_file and os.path.exists(temp_boto_file):
-                os.remove(temp_boto_file)
-                print(f"🗑️ [BACKGROUND] Cleaned up temporary Boto config: {temp_boto_file}")
-
             # NEW: Clean up the original local checkpoint directory if upload was successful
             # This prevents race conditions with _cleanup_old_checkpoints
             if upload_successful_flag:
@@ -510,8 +485,16 @@ class CheckpointManager:
     def get_latest_checkpoint(self) -> Optional[str]:
         """Find the latest checkpoint in GCS"""
         if not hasattr(self, 'client') or self.client is None:
-            self.client = storage.Client()
-            self.bucket = self.client.bucket(self.bucket_name)
+            try:
+                if self.credentials_path and os.path.exists(self.credentials_path):
+                    creds = service_account.Credentials.from_service_account_file(self.credentials_path)
+                    self.client = storage.Client(project=self.project_id, credentials=creds)
+                else:
+                    self.client = storage.Client()
+                self.bucket = self.client.bucket(self.bucket_name)
+            except Exception as e:
+                print(f"❌ Failed to initialize GCS client for latest checkpoint: {e}")
+                return None
             
         prefix = f"{self.checkpoint_path}/"
         blobs = list(self.bucket.list_blobs(prefix=prefix))
