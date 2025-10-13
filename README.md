@@ -1,4 +1,4 @@
-# 🚀 ReFocused-AI: 1.2B Parameter Language Model Pipeline
+# ReFocused-AI: 1.2B Parameter Language Model Pipeline
 
 ##  Why this project exists
 
