@@ -1,20 +1,20 @@
 # 🚀 ReFocused-AI: 1.2B Parameter Language Model Pipeline
 
-## 🌱 Why this project exists
+##  Why this project exists
 
 I built this to power my ReFocused application. It generates useful, personalized content like recommendations, interesting facts, weekly themes, and it supports chatting with the model. I also wanted to see if I could build a full end‑to‑end training stack after reading projects like llm.c — the low‑level details were fascinating and I wanted to learn by doing.
 
-## 📚 What I learned
+##  What I learned
 
 I ended up going a lot deeper than I planned, mostly because the internals kept pulling me in even after everything “worked.” Getting from raw text to tokens to attention blocks made me appreciate how many tiny choices (padding, masks, precision) quietly decide whether training feels smooth or fragile. I also built a practical feel for the whole pipeline: data quality matters most, stability and checkpointing aren’t optional, and scaling only helps if your I/O keeps up.
 
 I’m still kind of amazed that these models stay coherent and are often accurate in normal use — and I’ve also seen enough failure cases to respect their limits. On the engineering side, the unglamorous parts carried a lot of weight: sharding, streaming, background uploads, and “resume actually resumes.” The performance wins that consistently helped were simple: mixed precision, `torch.compile` where it works, and sensible dataloader settings.
 
-## 💛 Favroite feature
+##  Favroite feature
 
 my favorite things about this pipeline is it really is user friendly it give steps tells you what worked and what didnt and how to fix it all in the command line another thing for me is i hate emojis in applications i think its a lower quality look but in this theyre spammed throughtout just to give that terminal some color plus seeing the rocket emoji after fialing over and over or the green checkmark after a bunch of red x's is enough to bring a tear down your face.
 
-## 🧱 Pipeline overview (end‑to‑end)
+##  Pipeline overview (end‑to‑end)
 
 1. `01_data_collection/`: Optional collectors for Reddit/Wikipedia; real‑time monitoring tools.
 2. `02_data_processing/`: Clean, dedupe, score quality, and create train/val/test splits.
@@ -24,9 +24,9 @@ my favorite things about this pipeline is it really is user friendly it give ste
 6. `06_fine_tuning/`: Fine‑tune the base model for chat/code/instruct (full or LoRA).
 7. `utilities/`: Analysis scripts (dataset stats, tokenized data checks, quick counts).
 
-## 📋 Quick Start
+##  Quick Start
 
-**👉 For complete setup instructions, see [SETUP_GUIDE.md](SETUP_GUIDE.md)**
+** For complete setup instructions, see [SETUP_GUIDE.md](SETUP_GUIDE.md)**
 
 ### TL;DR Setup
 ```bash
@@ -44,7 +44,7 @@ cd 05_model_training
 ./start_training.sh --config test
 ```
 
-## 🗂️ Project Structure
+##  Project Structure
 
 ```
 ReFocused-Ai/
@@ -52,7 +52,7 @@ ReFocused-Ai/
 ├── 02_data_processing/         # Clean, quality‑score, splits
 ├── 03_tokenizer_training/      # Train tokenizer (BPE)
 ├── 04_data_tokenization/       # Produce .npz token shards
-├── 05_model_training/          # 🎯 Training system (GPT‑NeoX 1.2B)
+├── 05_model_training/          #  Training system (GPT‑NeoX 1.2B)
 │   ├── train.py                # Main training script
 │   ├── start_training.sh       # One‑click launcher
 │   ├── README.md               # Detailed training docs
@@ -62,12 +62,12 @@ ReFocused-Ai/
 │   └── checkpoints/            # Local checkpoint storage
 ├── 06_fine_tuning/             # Fine‑tuning (LoRA/full; chat/code/instruct)
 ├── utilities/                  # Analysis scripts
-├── SETUP_GUIDE.md              # 📖 Complete setup guide
+├── SETUP_GUIDE.md              # Complete setup guide
 ├── requirements.txt            # Python dependencies
 └── README.md                   # This file
 ```
 
-## ✨ Key Features (whole pipeline)
+##  Key Features (whole pipeline)
 
 - **Data collection**: Real‑time Reddit/Wikipedia collectors with monitoring (optional)
 - **Processing**: Dedup/quality filters, clean JSONL, balanced splits
@@ -79,7 +79,7 @@ ReFocused-Ai/
 - **Monitoring**: CLI logs, TensorBoard support; progress and performance hints
 - **Configs**: Test and production presets; easy overrides for steps/batch size
 
-## 🚀 End‑to‑end Quick Start
+##  End‑to‑end Quick Start
 
 ```bash
 # 1) (Optional) Collect data
@@ -118,14 +118,14 @@ python 06_fine_tuning/fine_tune.py \
   --output-dir ./fine_tuned_models
 ```
 
-## 📊 Training Configurations
+##  Training Configurations
 
 | Config | Steps | Files | Batch Size | Duration | Purpose |
 |--------|-------|-------|------------|----------|---------|
 | **test** | 1000 | 5 | 1 | ~10-30 min | Testing, experiments |
 | **production** | 10000 | All | 4 | Hours-days | Full training |
 
-## ☁️ Checkpoint System
+##  Checkpoint System
 
 - **Automatic uploads** to `gs://refocused-ai/Checkpoints/`
 - **Comprehensive metadata** with training metrics
@@ -133,7 +133,7 @@ python 06_fine_tuning/fine_tune.py \
 - **Resume capability** from any checkpoint
 - **Local cleanup** of old checkpoints
 
-## 🔧 Requirements
+##  Requirements
 
 - **Python 3.9+** (recommended: 3.11)
 - **PyTorch 2.0+** with CUDA support (optional but recommended)
@@ -141,14 +141,14 @@ python 06_fine_tuning/fine_tune.py \
 - **8GB+ RAM** (16GB+ recommended)
 - **NVIDIA GPU** (optional but significantly faster)
 
-## 📖 Documentation
+##  Documentation
 
 - **[SETUP_GUIDE.md](SETUP_GUIDE.md)**: Complete setup instructions with virtual environment
 - **[05_model_training/README.md](05_model_training/README.md)**: Detailed training documentation
 - **[06_fine_tuning/README.md](06_fine_tuning/README.md)**: Fine‑tuning methods and tasks
 - **[configs/](05_model_training/configs/)**: Training and model configuration files
 
-## 🎯 Model Details
+##  Model Details
 
 - **Architecture**: GPT-NeoX
 - **Parameters**: ~1.2 billion
@@ -156,14 +156,14 @@ python 06_fine_tuning/fine_tune.py \
 - **Vocabulary**: 50,257 tokens
 - **Training Data**: Reddit conversations (cleaned and tokenized)
 
-## 🤝 Contributing
+##  Contributing
 
 1. Follow the setup guide to get training working
 2. Make changes in appropriate directories
 3. Test with `./start_training.sh --config test --max-steps 5`
 4. Submit pull requests with clear descriptions
 
-## 📞 Support
+##  Support
 
 For issues:
 1. Check [SETUP_GUIDE.md](SETUP_GUIDE.md) troubleshooting section
@@ -173,4 +173,4 @@ For issues:
 
 ---
 
-**Ready to train? Start with [SETUP_GUIDE.md](SETUP_GUIDE.md)! 🚀** 
+**Ready to train? Start with [SETUP_GUIDE.md](SETUP_GUIDE.md)! ** 
