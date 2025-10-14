@@ -12,7 +12,7 @@ I’m still kind of amazed that these models stay coherent and are often accurat
 
 ##  Favroite feature
 
-my favorite things about this pipeline is it really is user friendly it give steps tells you what worked and what didnt and how to fix it all in the command line another thing for me is i hate emojis in applications i think its a lower quality look but in this theyre spammed throughtout just to give that terminal some color plus seeing the rocket emoji after fialing over and over or the green checkmark after a bunch of red x's is enough to bring a tear down your face.
+my favorite things about this pipeline is it really is user friendly it give steps tells you what worked and what didnt and how to fix it all in the command line another thing for me is i hate emojis in applications i think its a lower quality look but in this theyre spammed throughtout just to give that terminal some color plus seeing the rocket emoji after failing over and over or the green checkmark after a bunch of red x's brings you genuine joy.
 
 ##  Pipeline overview (end‑to‑end)
 
