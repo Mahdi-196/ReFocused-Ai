@@ -1,4 +1,4 @@
-# ReFocused-AI: 1.2B Parameter Language Model Pipeline
+# ReFocused-AI: 1.2B Parameter Language Model Pipeline (170$ Trained Base model)
 
 ##  Why this project exists
 
@@ -8,7 +8,7 @@ I built this to power my ReFocused application. It generates useful, personalize
 
 I ended up going a lot deeper than I planned, mostly because the internals kept pulling me in even after everything “worked.” Getting from raw text to tokens to attention blocks made me appreciate how many tiny choices (padding, masks, precision) quietly decide whether training feels smooth or fragile. I also built a practical feel for the whole pipeline: data quality matters most, stability and checkpointing aren’t optional, and scaling only helps if your I/O keeps up.
 
-I’m still kind of amazed that these models stay coherent and are often accurate in normal use — and I’ve also seen enough failure cases to respect their limits. On the engineering side, the unglamorous parts carried a lot of weight: sharding, streaming, background uploads, and “resume actually resumes.” The performance wins that consistently helped were simple: mixed precision, `torch.compile` where it works, and sensible dataloader settings.
+I’m still kind of amazed that these models stay coherent and are often accurate in normal use and I’ve also seen enough failure cases to respect their limits. On the engineering side, the unglamorous parts carried a lot of weight: sharding, streaming, background uploads, and “resume actually resumes.” The performance wins that consistently helped were simple: mixed precision, `torch.compile` where it works, and sensible dataloader settings.
 
 ##  Favroite feature
 
@@ -139,7 +139,7 @@ python 06_fine_tuning/fine_tune.py \
 - **PyTorch 2.0+** with CUDA support (optional but recommended)
 - **Google Cloud Storage** access with service account credentials
 - **8GB+ RAM** (16GB+ recommended)
-- **NVIDIA GPU** (optional but significantly faster)
+- **NVIDIA GPU** (optional but significantly faster up to 8)
 
 ##  Documentation
 
@@ -154,7 +154,7 @@ python 06_fine_tuning/fine_tune.py \
 - **Parameters**: ~1.2 billion
 - **Context Length**: 2048 tokens  
 - **Vocabulary**: 50,257 tokens
-- **Training Data**: Reddit conversations (cleaned and tokenized)
+- **Training Data**: Reddit conversations, Premade General sets, wikipedia (cleaned and tokenized)
 
 ##  Contributing
 
@@ -173,4 +173,4 @@ For issues:
 
 ---
 
-**Ready to train? Start with [SETUP_GUIDE.md](SETUP_GUIDE.md)! ** 
+**Start with [SETUP_GUIDE.md](SETUP_GUIDE.md)! ** 
