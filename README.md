@@ -2,7 +2,7 @@
 
 ##  Why this project exists
 
-I built this to power my ReFocused application. It generates useful, personalized content like recommendations, interesting facts, weekly themes, and it supports chatting with the model. I also wanted to see if I could build a full end‑to‑end training stack after reading projects like llm.c — the low‑level details were fascinating and I wanted to learn by doing.
+I built this to power my ReFocused application. It generates useful, personalized content like recommendations, interesting facts, weekly themes, and it supports chatting with the model. I also wanted to see if I could build a full end to end training stack after reading projects like llm.c the low‑level details were fascinating and I wanted to learn by doing.
 
 ##  What I learned
 
