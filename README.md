@@ -14,6 +14,9 @@ I’m still kind of amazed that these models stay coherent and are often accurat
 
 my favorite things about this pipeline is it really is user friendly it give steps tells you what worked and what didnt and how to fix it all in the command line another thing for me is i hate emojis in applications i think its a lower quality look but in this theyre spammed throughtout just to give that terminal some color plus seeing the rocket emoji after failing over and over or the green checkmark after a bunch of red x's brings you genuine joy.
 
+![ReFocused Architecture Diagram](https://mahdi-readme-images.s3.us-east-1.amazonaws.com/Refocused-AI-Architecture+)
+
+
 ##  Pipeline overview (end‑to‑end)
 
 1. `01_data_collection/`: Optional collectors for Reddit/Wikipedia; real‑time monitoring tools.
